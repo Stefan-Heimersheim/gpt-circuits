@@ -4,7 +4,7 @@ import torch
 
 from circuits import Circuit, Node
 from circuits.search.ablation import Ablator
-from circuits.search.divergence import analyze_divergence, get_predictions
+from circuits.search.divergence import analyze_node_divergence, get_predictions
 from models.sparsified import SparsifiedGPT, SparsifiedGPTOutput
 
 
@@ -95,7 +95,7 @@ class NodeSearch:
         for _ in range(target_token_idx + 1):
             # Compute KL divergence
             circuit_candidate = Circuit(nodes=frozenset(circuit_nodes - discard_candidates))
-            circuit_analysis = analyze_divergence(
+            circuit_analysis = analyze_node_divergence(
                 self.model,
                 self.ablator,
                 layer_idx,
@@ -162,7 +162,7 @@ class NodeSearch:
         for _ in range(len(circuit_nodes)):
             # Compute KL divergence
             circuit_candidate = Circuit(nodes=frozenset(circuit_nodes - discard_candidates))
-            circuit_analysis = analyze_divergence(
+            circuit_analysis = analyze_node_divergence(
                 self.model,
                 self.ablator,
                 layer_idx,
@@ -235,7 +235,7 @@ class NodeSearch:
             circuit_variants[node] = Circuit(nodes=frozenset([n for n in circuit_nodes if n != node]))
 
         # Calculate KL divergence for each variant
-        kld_results = analyze_divergence(
+        kld_results = analyze_node_divergence(
             self.model,
             self.ablator,
             layer_idx,
@@ -268,7 +268,7 @@ class NodeSearch:
             circuit_variants[token_idx] = circuit_variant
 
         # Calculate KL divergence for each variant
-        kld_results = analyze_divergence(
+        kld_results = analyze_node_divergence(
             self.model,
             self.ablator,
             layer_idx,

@@ -1,14 +1,8 @@
-from collections import defaultdict
-
 import torch
 
 from circuits import Circuit, Edge, Node
 from circuits.search.ablation import Ablator
-from circuits.search.divergence import (
-    analyze_divergence,
-    compute_downstream_magnitudes,
-    patch_feature_magnitudes,
-)
+from circuits.search.divergence import analyze_edge_divergence
 from models.sparsified import SparsifiedGPT, SparsifiedGPTOutput
 
 
@@ -43,9 +37,8 @@ class EdgeSearch:
         :param downstream_nodes: The downstream nodes to use for circuit extraction.
         :param threshold: The threshold to use for circuit extraction.
         """
-        assert len(downstream_nodes) > 0
-        downstream_idx = next(iter(downstream_nodes)).layer_idx
-        upstream_idx = downstream_idx - 1
+        assert len(upstream_nodes) > 0
+        upstream_layer_idx = next(iter(upstream_nodes)).layer_idx
 
         # Convert tokens to tensor
         input: torch.Tensor = torch.tensor(tokens, device=self.model.config.device).unsqueeze(0)  # Shape: (1, T)
@@ -56,8 +49,8 @@ class EdgeSearch:
         target_logits = output.logits.squeeze(0)[target_token_idx]  # Shape: (V)
 
         # Get feature magnitudes
-        upstream_magnitudes = output.feature_magnitudes[upstream_idx].squeeze(0)  # Shape: (T, F)
-        original_downstream_magnitudes = output.feature_magnitudes[downstream_idx].squeeze(0)  # Shape: (T, F)
+        upstream_magnitudes = output.feature_magnitudes[upstream_layer_idx].squeeze(0)  # Shape: (T, F)
+        downstream_magnitudes = output.feature_magnitudes[upstream_layer_idx + 1].squeeze(0)  # Shape: (T, F)
 
         # Set initial edges as all edges that could exist between upstream and downstream nodes
         initial_edges = set()
@@ -73,24 +66,19 @@ class EdgeSearch:
 
         # Start search
         for _ in range(len(initial_edges)):
-            # Derive downstream magnitudes from upstream magnitudes and edges
-            circuit_candidate = Circuit(downstream_nodes, edges=frozenset(circuit_edges - discard_candidates))
-            downstream_magnitudes = self.derive_downstream_magnitudes(
-                downstream_nodes,
-                circuit_candidate.edges,
-                upstream_magnitudes,
-                original_downstream_magnitudes,
-                target_token_idx,
-            )
-
             # Compute KL divergence
-            circuit_analysis = analyze_divergence(
+            circuit_candidate = Circuit(
+                nodes=upstream_nodes | downstream_nodes,
+                edges=frozenset(circuit_edges - discard_candidates),
+            )
+            circuit_analysis = analyze_edge_divergence(
                 self.model,
                 self.ablator,
-                downstream_idx,
+                upstream_layer_idx,
                 target_token_idx,
                 target_logits,
                 [circuit_candidate],
+                [upstream_magnitudes],
                 [downstream_magnitudes],
                 num_samples=self.num_samples,
             )[circuit_candidate]
@@ -110,10 +98,11 @@ class EdgeSearch:
 
                 # Sort edges by KL divergence (descending)
                 estimated_edge_ablation_effects = self.estimate_edge_ablation_effects(
+                    upstream_nodes,
                     downstream_nodes,
                     circuit_edges,
                     upstream_magnitudes,
-                    original_downstream_magnitudes,
+                    downstream_magnitudes,
                     target_token_idx,
                     target_logits,
                 )
@@ -139,112 +128,44 @@ class EdgeSearch:
 
         return circuit_edges
 
-    def derive_downstream_magnitudes(
-        self,
-        downstream_nodes: frozenset[Node],
-        edges: frozenset[Edge],
-        upstream_magnitudes: torch.Tensor,  # Shape: (T, F)
-        original_downstream_magnitudes: torch.Tensor,  # Shape: (T, F)
-        target_token_idx: int,
-    ) -> torch.Tensor:  # Shape: (T, F)
-        """
-        Derive downstream feature magnitudes from upstream feature magnitudes and edges.
-
-        :param downstream_nodes: The downstream nodes to use for deriving downstream feature magnitudes.
-        :param edges: The edges to use for deriving downstream feature magnitudes.
-        :param upstream_magnitudes: The upstream feature magnitudes.
-        :param original_downstream_magnitudes: The original downstream feature magnitudes.
-        :param target_token_idx: The target token index.
-        """
-        # Map downstream nodes to upstream dependencies
-        node_to_dependencies: dict[Node, frozenset[Node]] = {}
-        for node in downstream_nodes:
-            node_to_dependencies[node] = frozenset([edge.upstream for edge in edges if edge.downstream == node])
-        dependencies_to_nodes: dict[frozenset[Node], set[Node]] = defaultdict(set)
-        for node, dependencies in node_to_dependencies.items():
-            dependencies_to_nodes[dependencies].add(node)
-
-        # Patch upstream feature magnitudes for each set of dependencies
-        circuit_variants = [Circuit(nodes=dependencies) for dependencies in dependencies_to_nodes.keys()]
-        upstream_idx = next(iter(downstream_nodes)).layer_idx - 1
-        patched_upstream_magnitudes = patch_feature_magnitudes(  # Shape: (num_samples, T, F)
-            self.ablator,
-            upstream_idx,
-            target_token_idx,
-            circuit_variants,
-            [upstream_magnitudes] * len(circuit_variants),
-            num_samples=self.num_samples,
-        )
-
-        # Compute downstream feature magnitudes for each set of dependencies
-        sampled_downstream_magnitudes = compute_downstream_magnitudes(  # Shape: (num_samples, T, F)
-            self.model,
-            upstream_idx,
-            patched_upstream_magnitudes,
-        )
-
-        # Map each downstream node to a set of sampled feature magnitudes
-        node_to_sampled_magnitudes: dict[Node, torch.Tensor] = {}
-        for circuit_variant, magnitudes in sampled_downstream_magnitudes.items():
-            for node in dependencies_to_nodes[circuit_variant.nodes]:
-                node_to_sampled_magnitudes[node] = magnitudes[:, node.token_idx, node.feature_idx]
-
-        # Patch downstream feature magnitudes using an average of the sampled feature magnitudes
-        patched_downstream_magnitudes = original_downstream_magnitudes.clone()
-        for node, sampled_magnitudes in node_to_sampled_magnitudes.items():
-            patched_downstream_magnitudes[node.token_idx, node.feature_idx] = sampled_magnitudes.mean(dim=0)
-
-        return patched_downstream_magnitudes
-
     def estimate_edge_ablation_effects(
         self,
+        upstream_nodes: frozenset[Node],
         downstream_nodes: frozenset[Node],
         edges: frozenset[Edge],
         upstream_magnitudes: torch.Tensor,  # Shape: (T, F)
-        original_downstream_magnitudes: torch.Tensor,  # Shape: (T, F)
+        downstream_magnitudes: torch.Tensor,  # Shape: (T, F)
         target_token_idx: int,
         target_logits: torch.Tensor,  # Shape: (V)
     ) -> dict[Edge, float]:
         """
         Estimate the KL divergence that results from ablating each edge in a circuit.
 
-        :param downstream_nodes: The downstream nodes to use for deriving downstream feature magnitudes.
-        :param edges: The edges to use for deriving downstream feature magnitudes.
+        :param upstream_nodes: The upstream nodes to use for estimating ablation effects.
+        :param downstream_nodes: The downstream nodes to use for estimating ablation effects.
+        :param edges: The edges to use for estimating ablation effects.
         :param upstream_magnitudes: The upstream feature magnitudes.
-        :param original_downstream_magnitudes: The original downstream feature magnitudes.
         :param target_token_idx: The target token index.
+        :param target_logits: The target logits for the target token.
         """
-
         # Create a set of circuit variants with one edge removed
         circuit_variants: list[Circuit] = []
         edge_to_circuit_variant: dict[Edge, Circuit] = {}
         for edge in edges:
-            circuit_variant = Circuit(downstream_nodes, edges=frozenset(edges - {edge}))
+            circuit_variant = Circuit(upstream_nodes | downstream_nodes, edges=frozenset(edges - {edge}))
             circuit_variants.append(circuit_variant)
             edge_to_circuit_variant[edge] = circuit_variant
 
-        # Compute downstream feature magnitudes for each circuit variant
-        downstream_magnitudes: list[torch.Tensor] = []
-        downstream_idx = next(iter(downstream_nodes)).layer_idx
-        for circuit_variant in circuit_variants:
-            magnitudes = self.derive_downstream_magnitudes(
-                downstream_nodes,
-                circuit_variant.edges,
-                upstream_magnitudes,
-                original_downstream_magnitudes,
-                target_token_idx,
-            )
-            downstream_magnitudes.append(magnitudes)
-
         # Calculate KL divergence for each variant
-        kld_results = analyze_divergence(
+        kld_results = analyze_edge_divergence(
             self.model,
             self.ablator,
-            downstream_idx,
+            next(iter(upstream_nodes)).layer_idx,
             target_token_idx,
             target_logits,
             circuit_variants,
-            downstream_magnitudes,
+            [upstream_magnitudes] * len(circuit_variants),
+            [downstream_magnitudes] * len(circuit_variants),
             self.num_samples,
         )
 
