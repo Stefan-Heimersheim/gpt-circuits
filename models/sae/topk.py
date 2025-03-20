@@ -15,24 +15,41 @@ class TopKSAE(nn.Module, SparseAutoencoder):
     """
     def __init__(self, layer_idx: int, 
                  config: SAEConfig, 
-                 loss_coefficients: Optional[LossCoefficients]):
+                 loss_coefficients: Optional[LossCoefficients],
+                 parent: Optional[nn.Module] = None):
         super(TopKSAE, self).__init__()
+        
         feature_size = config.n_features[layer_idx]  # SAE dictionary size.
+        self.feature_size = feature_size
         embedding_size = config.gpt_config.n_embd  # GPT embedding size.
-        self.W_dec = nn.Parameter(
-            torch.nn.init.kaiming_uniform_(
-                torch.empty(feature_size, embedding_size)))
-        self.b_enc = nn.Parameter(torch.zeros(feature_size))
-        self.b_dec = nn.Parameter(torch.zeros(embedding_size))
+        
         assert config.top_k is not None, "Top-k must be provided. Verify checkpoints/<model_name>/sae.json contains a 'top_k' key."
+        assert not config.shared_layers or parent is not None, "Parent must be provided if shared_layers is True."
+        
         self.k = config.top_k[layer_idx]
-
-        try:
-            # NOTE: Subclass might define these properties.
-            self.W_enc = nn.Parameter(torch.empty(embedding_size, feature_size))
-            self.W_enc.data = self.W_dec.data.T.detach().clone()  # initialize W_enc from W_dec
-        except KeyError:
-            pass
+        
+        self.b_dec = nn.Parameter(torch.zeros(embedding_size))
+        
+        if not config.shared_layers:
+            self.W_dec = nn.Parameter(
+                torch.nn.init.kaiming_uniform_(
+                    torch.empty(feature_size, embedding_size)))
+            self.b_enc = nn.Parameter(torch.zeros(feature_size))
+            
+            try:
+                # NOTE: Subclass might define these properties.
+                self.W_enc = nn.Parameter(torch.empty(embedding_size, feature_size))
+                self.W_enc.data = self.W_dec.data.T.detach().clone()  # initialize W_enc from W_dec
+            except KeyError:
+                pass
+    
+        else:
+            self.register_parameter("W_dec", None)
+            self.W_dec = self.parent.W_dec[:feature_size, :]
+            self.register_parameter("W_enc", None)
+            self.W_enc = self.parent.W_enc[:, :feature_size]
+            self.register_parameter("b_enc", None)
+            self.b_enc = self.parent.b_enc[:feature_size]
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         """

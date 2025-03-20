@@ -9,14 +9,41 @@ import torch.nn as nn
 from safetensors.torch import load_model, save_model
 from torch.nn import functional as F
 
-from config.sae.models import SAEConfig, SAEVariant
+from config.sae.models import SAEConfig
 from config.sae.training import LossCoefficients
 from models.gpt import GPT
 from models.sae import EncoderOutput, SAELossComponents
-from models.sae.gated import GatedSAE, GatedSAE_V2
-from models.sae.jumprelu import JumpReLUSAE
-from models.sae.standard import StandardSAE, StandardSAE_V2
-from models.sae.topk import TopKSAE
+
+from models.sae.sharedlayer import SharedLayer
+
+def get_sae_class(config: SAEConfig) -> type:
+    """
+    Maps the SAE variant to the actual class.
+    """
+    
+    from models.sae.gated import GatedSAE, GatedSAE_V2
+    from models.sae.jumprelu import JumpReLUSAE
+    from models.sae.standard import StandardSAE, StandardSAE_V2
+    from models.sae.topk import TopKSAE
+    from config.sae.models import SAEVariant
+    
+    
+    match config.sae_variant:
+        case SAEVariant.STANDARD:
+            return StandardSAE
+        case SAEVariant.STANDARD_V2:
+            return StandardSAE_V2
+        case SAEVariant.GATED:
+            return GatedSAE
+        case SAEVariant.GATED_V2:
+            return GatedSAE_V2
+        case SAEVariant.JUMP_RELU:
+            return JumpReLUSAE
+        case SAEVariant.TOPK:
+            return TopKSAE
+        case _:
+            raise ValueError(f"Unrecognized SAE variant: {config.sae_variant}")
+
 
 @dataclasses.dataclass
 class SparsifiedGPTOutput:
@@ -60,9 +87,12 @@ class SparsifiedGPT(nn.Module):
         self.gpt = GPT(config.gpt_config)
 
         # Construct sae layers
-        sae_class = self.get_sae_class(config)
+        sae_class = get_sae_class(config)
         self.layer_idxs = trainable_layers if trainable_layers else list(range(len(config.n_features)))
-        self.saes = nn.ModuleDict(dict([(f"{i}", sae_class(i, config, loss_coefficients)) for i in self.layer_idxs]))
+        if config.shared_layers:
+            self.saes = SharedLayer(self.layer_idxs, config, loss_coefficients)
+        else:
+            self.saes = nn.ModuleDict(dict([(f"{i}", sae_class(i, config, loss_coefficients)) for i in self.layer_idxs]))
 
     def forward(
         self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False
@@ -268,22 +298,3 @@ class SparsifiedGPT(nn.Module):
                 weights_path = os.path.join(dir, f"sae.{layer_name}.safetensors")
                 save_model(module, weights_path)
 
-    def get_sae_class(self, config: SAEConfig) -> type:
-        """
-        Maps the SAE variant to the actual class.
-        """
-        match config.sae_variant:
-            case SAEVariant.STANDARD:
-                return StandardSAE
-            case SAEVariant.STANDARD_V2:
-                return StandardSAE_V2
-            case SAEVariant.GATED:
-                return GatedSAE
-            case SAEVariant.GATED_V2:
-                return GatedSAE_V2
-            case SAEVariant.JUMP_RELU:
-                return JumpReLUSAE
-            case SAEVariant.TOPK:
-                return TopKSAE
-            case _:
-                raise ValueError(f"Unrecognized SAE variant: {self.sae_variant}")
