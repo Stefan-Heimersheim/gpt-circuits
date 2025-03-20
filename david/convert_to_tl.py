@@ -34,23 +34,21 @@ def define_model(name):
 
     return model, tokenizer, config
 
-def convert_gpt_to_transformer_lens(model, config):
+def convert_to_tl(model, config):
     # Create a HookedTransformerConfig
     hooked_config = HookedTransformerConfig(
-        n_layers=config.gpt_config.n_layer,
-        d_model=config.gpt_config.n_embd,
-        n_ctx=config.gpt_config.block_size,
-        d_head=config.gpt_config.n_embd // config.gpt_config.n_head,
-        d_mlp=4 * config.gpt_config.n_embd,
-        n_heads=config.gpt_config.n_head,
-        model_name=config.gpt_config.name,
+        n_layers=config.gpt_config.n_layer, # 4
+        d_model=config.gpt_config.n_embd, # 64
+        n_ctx=config.gpt_config.block_size, # 64
+        d_head=config.gpt_config.n_embd // config.gpt_config.n_head, # 16
+        model_name = "shakespeare_64x4",
         device=config.device,
         act_fn="gelu_pytorch_tanh",
         d_vocab=config.gpt_config.vocab_size,
-        use_attn_result=True,
-        use_local_attn=False,
         tokenizer_prepends_bos=True,
         default_prepend_bos=True,
+        normalization_type="LN",
+        positional_embedding_type="standard",   
     )
     # Initialize the HookedTransformer
     ht = HookedTransformer(hooked_config)
@@ -197,6 +195,6 @@ def run_tests(model, ht, config):
 if __name__ == "__main__":
     name = 'shakespeare_64x4'
     model, tokenizer, config = define_model(name)
-    ht = convert_gpt_to_transformer_lens(model, config)
+    ht = convert_to_tl(model, config)
     run_tests(model, ht, config)
 # %%

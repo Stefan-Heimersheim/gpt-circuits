@@ -1,37 +1,43 @@
 # %%
 import os
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# %%
+# current_dir = os.path.abspath(os.path.dirname(__file__))
+# while os.path.basename(current_dir) != "gpt-circuits":
+#     current_dir = os.path.abspath(os.path.join(current_dir, ".."))
+# os.chdir(current_dir)
+# print(f"Current directory: {current_dir}")
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 # %%
 import torch
 import numpy as np
 from tqdm import tqdm
-from config.gpt.training import options as gpt_options
+from config.gpt.models import gpt_options
+from config.gpt.training import options as gpt_train_options
 from models.gpt import GPT
 from models.sae.multilayer import MultiLayerSAEBase
 import warnings
 import argparse
-
+from config.sae.training import SAETrainingConfig, LossCoefficients
+from config.sae.models import SAEConfig, SAEVariant
 from jaxtyping import Float
 from torch import Tensor
-from config.sae.training import options as sae_options
 from torch.utils.data import TensorDataset, DataLoader
-from cache_activations import cache_activations
+from david.cache_activations import cache_activations
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model_name = 'shakespeare_64x4'
 # Add root directory to sys.path dynamically
 
 
 # Define paths
-checkpoints = "../checkpoints"
-data_root = "../data"
+checkpoints = "checkpoints"
+data_root = "data"
 model_path = os.path.join(checkpoints, model_name)
 dataset_path = os.path.join(data_root, model_name)
 
 # Load model configuration
-config = gpt_options[model_name]
+config = gpt_train_options[model_name]
 model = GPT(config.gpt_config)
 model = model.load(model_path, device=config.device)
 model.to(device)
@@ -58,25 +64,24 @@ shakespeare_64x4_defaults = {
     "min_lr": 1e-4,
 }
 
-sae_train_config = sae_options["staircase.shakespeare_64x4"]
+starcasex8_options = SAEConfig(
+        name="staircasex8.shakespeare_64x4",
+        gpt_config=gpt_options["ascii_64x4"],
+        n_features=64 * 8,
+        sae_variant=SAEVariant.STANDARD,
+    )
+
+sae_train_config = SAETrainingConfig(
+        name="multilayer.shakespeare_64x4",
+        sae_config=starcasex8_options,
+        **shakespeare_64x4_defaults,
+        loss_coefficients=LossCoefficients(
+            sparsity=(0.06, 0.24, 0.8, 1.0, 2.5),  # Targets L0s of ~10
+        ))
 sae = MultiLayerSAEBase(sae_train_config.sae_config, sae_train_config.loss_coefficients)
-sae = sae.to(device)
-# %%
-
-# def train_multi_sae(
-#     model: MultiLayerSAEBase,
-#     train_data: np.ndarray,
-#     val_data: np.ndarray,
-#     config: dict = shakespeare_64x4_defaults,
-# ):
-#     """Train a multi-layer sparse autoencoder using DataLoader"""
-
-
-# trained_model = train_multi_sae(
-#     model=multi_layer_sae,
-#     train_data=cache_train,
-#     val_data=cache_val
-# )
+sae.to(device)
+# compile it
+comp_sae = sae.compile()
 
 config = shakespeare_64x4_defaults
 
@@ -102,7 +107,6 @@ val_loader = DataLoader(
     shuffle=False,
 )
 
-# Setup optimizer
 
 class ScaledAdamW(torch.optim.AdamW):
     def __init__(self, params, sae, lr=0.001, **kwargs):
@@ -251,7 +255,7 @@ while step < config['max_steps']:
                     best_val_loss = avg_val_loss
                     torch.save({
                         'step': step,
-                        'sae_state_dict': sae.state_dict(),
+                        'sae_state_dict': sae.state_dict(),  # Save state dict of original sae as it was compiled
                         'optimizer_state_dict': optimizer.state_dict(),
                         'val_loss': best_val_loss,
                         'layer_metrics': layer_metrics,  # Save metrics in checkpoint
@@ -275,7 +279,6 @@ while step < config['max_steps']:
 progress_bar.close()
 #return model
 
-    
 # %%
 from safetensors.torch import save_file
 import torch
