@@ -30,14 +30,12 @@ class SharedLayer():
         print(f"feature_size: {feature_size}, embedding_size: {embedding_size}")
         
         # Shared parameters across all layers
-        self.W_dec = torch.nn.init.kaiming_uniform_(torch.empty(feature_size, embedding_size))
-        self.b_enc = torch.zeros(feature_size)
-        self.b_dec = torch.zeros(embedding_size)
-        self.W_enc = torch.nn.init.kaiming_uniform_(torch.empty(embedding_size, feature_size))
-        
+        self.W_dec = nn.Parameter(torch.nn.init.kaiming_uniform_(torch.empty(feature_size, embedding_size)))
+        self.b_enc = nn.Parameter(torch.zeros(feature_size))
+        self.b_dec = nn.Parameter(torch.zeros(embedding_size))
         try:
             # NOTE: Subclass might define these properties.
-            self.W_enc = torch.empty(embedding_size, feature_size)
+            self.W_enc = nn.Parameter(torch.empty(embedding_size, feature_size))
             self.W_enc.data = self.W_dec.data.T.detach().clone()  # initialize W_enc from W_dec
         except KeyError:
             pass
