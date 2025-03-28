@@ -20,7 +20,6 @@ class TopKSAE(SparseAutoencoder):
     def __init__(self, layer_idx: int, config: SAEConfig, loss_coefficients: Optional[LossCoefficients], model: nn.Module):
         super().__init__(layer_idx, config, loss_coefficients, model)
         feature_size = config.n_features[layer_idx]  # SAE dictionary size.
-        self.feature_size = feature_size
         embedding_size = config.gpt_config.n_embd  # GPT embedding size.
         self.W_dec = nn.Parameter(torch.nn.init.kaiming_uniform_(torch.empty(feature_size, embedding_size)))
         self.b_enc = nn.Parameter(torch.zeros(feature_size))

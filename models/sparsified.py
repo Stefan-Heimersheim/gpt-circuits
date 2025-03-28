@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from config.sae.models import SAEConfig
+from config.sae.models import SAEConfig, SAEVariant
 from config.sae.training import LossCoefficients
 from models.gpt import GPT
 from models.sae import EncoderOutput, SAELossComponents, SparseAutoencoder
