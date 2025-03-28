@@ -11,7 +11,7 @@ from config.sae.training import SAETrainingConfig, LossCoefficients
 from config.sae.models import SAEConfig, SAEVariant
 from torch.utils.data import TensorDataset, DataLoader
 from torch import nn
-from david.cache_activations import cache_activations
+from david.OLD.cache_activations import cache_activations
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model_name = 'shakespeare_64x4'
