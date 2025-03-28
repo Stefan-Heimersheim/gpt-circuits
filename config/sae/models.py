@@ -19,6 +19,7 @@ class SAEConfig(Config):
     n_features: tuple = ()  # Number of features in each layer
     sae_variant: SAEVariant = SAEVariant.STANDARD
     top_k: Optional[tuple[int, ...]] = None
+    shared_layers: bool = False
     
     @property
     def block_size(self) -> int:

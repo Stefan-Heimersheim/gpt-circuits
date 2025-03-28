@@ -22,34 +22,42 @@ class TopKSAE(nn.Module, SparseAutoencoder):
         feature_size = config.n_features[layer_idx]  # SAE dictionary size.
         self.feature_size = feature_size
         embedding_size = config.gpt_config.n_embd  # GPT embedding size.
+        self.embedding_size = embedding_size
+        self.k = config.top_k[layer_idx]
+        self._parent = parent
+        self.config = config
         
         assert config.top_k is not None, "Top-k must be provided. Verify checkpoints/<model_name>/sae.json contains a 'top_k' key."
         assert not config.shared_layers or parent is not None, "Parent must be provided if shared_layers is True."
+        assert loss_coefficients is None, "Loss coefficients must be None for Top-k SAE."
         
-        self.k = config.top_k[layer_idx]
-        
-        self.b_dec = nn.Parameter(torch.zeros(embedding_size))
-        
+        #models share encoder/decoder weights with parent model
         if not config.shared_layers:
-            self.W_dec = nn.Parameter(
-                torch.nn.init.kaiming_uniform_(
-                    torch.empty(feature_size, embedding_size)))
-            self.b_enc = nn.Parameter(torch.zeros(feature_size))
+            self.W_dec = nn.Parameter(torch.nn.init.kaiming_uniform_(torch.empty(feature_size, embedding_size)))
+            #self.b_enc = nn.Parameter(torch.zeros(feature_size))
             
             try:
                 # NOTE: Subclass might define these properties.
                 self.W_enc = nn.Parameter(torch.empty(embedding_size, feature_size))
                 self.W_enc.data = self.W_dec.data.T.detach().clone()  # initialize W_enc from W_dec
             except KeyError:
-                pass
-    
+                assert False, "W_enc must be defined in subclass. TOP_k SAE how did I get here?"
         else:
-            self.register_parameter("W_dec", None)
-            self.W_dec = self.parent.W_dec[:feature_size, :]
-            self.register_parameter("W_enc", None)
-            self.W_enc = self.parent.W_enc[:, :feature_size]
-            self.register_parameter("b_enc", None)
-            self.b_enc = self.parent.b_enc[:feature_size]
+            self.W_dec = nn.Parameter(self._parent.W_dec.data[:feature_size, :])
+            self.W_enc = nn.Parameter(self._parent.W_enc.data[:, :feature_size])
+    
+        # each model gets it's own biases 
+        self.b_enc = nn.Parameter(torch.zeros(feature_size))
+        self.b_dec = nn.Parameter(torch.zeros(embedding_size))
+        
+    def __repr__(self):
+        # to avoid infinite recursion as children point to parent
+        parent_ref = self._parent
+        self._parent = None
+        base_repr = super().__repr__()  # Get standard PyTorch repr
+        self._parent = parent_ref
+        parent_class_name = parent_ref.__class__.__name__ if parent_ref else "None"
+        return base_repr + f"\n(Parent: {parent_class_name})"
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         """

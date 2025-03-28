@@ -100,7 +100,7 @@ options: dict[str, SAETrainingConfig] = map_options(
         name="topk.shakespeare_64x4",
         sae_config=sae_options["topk-x8.shakespeare_64x4"],
         **shakespeare_64x4_defaults,
-        loss_coefficients=LossCoefficients()
+        loss_coefficients=None
     ),
     SAETrainingConfig(
         name="standard_fat.shakespeare_64x4",
@@ -122,13 +122,13 @@ options: dict[str, SAETrainingConfig] = map_options(
         name="topk-staircase.shakespeare_64x4",
         sae_config=sae_options["topk-staircase-x8.shakespeare_64x4"],
         **shakespeare_64x4_defaults,
-        loss_coefficients=LossCoefficients(),
+        loss_coefficients=None,
     ),
     SAETrainingConfig(
         name="topk-x40.shakespeare_64x4",
         sae_config=sae_options["topk-x40.shakespeare_64x4"],
         **shakespeare_64x4_defaults,
-        loss_coefficients=LossCoefficients(),
+        loss_coefficients=None,
     ),
     SAETrainingConfig(
         name="regularized.shakespeare_64x4",

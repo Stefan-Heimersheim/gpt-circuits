@@ -7,7 +7,7 @@ from config.sae.models import SAEConfig
 from config.sae.training import LossCoefficients
 
 
-class SharedLayer(nn.Module):
+class SharedLayer():
     """
     Wrapper for multiple SAE layers with shared weights.
     Each indexed layer behaves like a virtual SAE with a different top-k value.
@@ -27,14 +27,12 @@ class SharedLayer(nn.Module):
         
         feature_size = max(config.n_features)
         embedding_size = config.gpt_config.n_embd
+        print(f"feature_size: {feature_size}, embedding_size: {embedding_size}")
         
         # Shared parameters across all layers
         self.W_dec = nn.Parameter(torch.nn.init.kaiming_uniform_(torch.empty(feature_size, embedding_size)))
         self.b_enc = nn.Parameter(torch.zeros(feature_size))
         self.b_dec = nn.Parameter(torch.zeros(embedding_size))
-        self.W_enc = nn.Parameter(torch.nn.init.kaiming_uniform_(torch.empty(embedding_size, feature_size)))
-        
-        
         try:
             # NOTE: Subclass might define these properties.
             self.W_enc = nn.Parameter(torch.empty(embedding_size, feature_size))
