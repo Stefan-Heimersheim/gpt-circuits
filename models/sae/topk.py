@@ -104,15 +104,17 @@ class TopKSharedContext(nn.Module):
         self.W_dec = nn.Parameter(torch.nn.init.kaiming_uniform_(torch.empty(feature_size, embedding_size, device=device)))
         self.W_enc = nn.Parameter(torch.empty(embedding_size, feature_size, device=device))
         self.W_enc.data = self.W_dec.data.T.detach().clone()  # initialize W_enc from W_dec
+        self.b_dec = nn.Parameter(torch.zeros(embedding_size))
 
         
-class StaircaseTopKSAE(TopKBase, StaircaseBaseSAE):
+class StaircaseTopKSAE(TopKBase, StaircaseBaseSAE, SparseAutoencoder):
     """
     TopKSAEs that share weights between layers, and each child uses slices into weights inside shared context.
     """
 
     def __init__(self, layer_idx: int, config: SAEConfig, loss_coefficients: Optional[LossCoefficients], model: nn.Module):
-        # We don't want to call init for TopKSAE because we need custom logic for instantiating weight parameters.
+        # We don't want to call init for TopKSAE because we need custom logic for instantiating weight parameters
+        SparseAutoencoder.__init__(self, layer_idx, config, loss_coefficients, model)
         TopKBase.__init__(self, layer_idx, config, loss_coefficients, model)
         StaircaseBaseSAE.__init__(self, layer_idx, config, loss_coefficients, model, TopKSharedContext)
         # All weight parameters are just views from the shared context.
@@ -120,8 +122,8 @@ class StaircaseTopKSAE(TopKBase, StaircaseBaseSAE):
         self.W_enc = self.shared_context.W_enc[:, :self.feature_size]
         # Each layer has it's own bias parameters.
         self.b_enc = nn.Parameter(torch.zeros(self.feature_size))
-        self.b_dec = nn.Parameter(torch.zeros(self.embedding_size))
-        
+        #self.b_dec = nn.Parameter(torch.zeros(self.embedding_size))
+        self.b_dec = self.shared_context.b_dec
         # self.W_dec = nn.Parameter(torch.nn.init.kaiming_uniform_(torch.empty(feature_size - prev_feature_size, embedding_size)))
         # self.W_enc = nn.Parameter(torch.empty(embedding_size, feature_size - prev_feature_size))
         # self.W_enc.data = self.W_dec.data.T.detach().clone()  # initialize W_enc from W_dec
