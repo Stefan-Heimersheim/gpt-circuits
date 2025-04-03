@@ -83,7 +83,7 @@ class SAETrainer(Trainer):
         if "staircase" in self.config.sae_config.sae_variant:
             l0_per_chunk = {}
             for layer_idx, feature_magnitudes in output.feature_magnitudes.items():
-                num_chunks = layer_idx + 1
+                num_chunks = 5 # layer_idx + 1 TODO: don't leave this!!
                 grouped_feature_magnitudes = torch.chunk(feature_magnitudes, num_chunks, dim=-1) # tuple[(batch, seq, feature_size_each_chunk)]
                 grouped_feature_magnitudes = torch.stack(grouped_feature_magnitudes, dim=-2) # (batch, seq, n_chunks, feature_size_each_chunk)
                 grouped_l0 = (grouped_feature_magnitudes != 0).float().sum(dim=-1) # (batch, seq, n_chunks)

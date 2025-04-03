@@ -96,6 +96,7 @@ class TopKSharedContext(nn.Module):
         super().__init__()
         embedding_size = config.gpt_config.n_embd  # GPT embedding size.
         feature_size = config.n_features[-1] # Last layer should be the largest and contain a superset of all features.
+        self.feature_size = feature_size
         assert feature_size == max(config.n_features)
 
         device = config.device
@@ -117,10 +118,12 @@ class StaircaseTopKSAE(TopKBase, StaircaseBaseSAE, SparseAutoencoder):
         TopKBase.__init__(self, layer_idx, config, loss_coefficients, model)
         StaircaseBaseSAE.__init__(self, layer_idx, config, loss_coefficients, model, TopKSharedContext)
         # All weight parameters are just views from the shared context.
-        self.W_dec = self.shared_context.W_dec[:self.feature_size, :]
-        self.W_enc = self.shared_context.W_enc[:, :self.feature_size]
+        feat_size = self.shared_context.feature_size
+        assert feat_size == self.shared_context.W_dec.shape[0]
+        self.W_dec = self.shared_context.W_dec[:feat_size, :]
+        self.W_enc = self.shared_context.W_enc[:, :feat_size]
         # Each layer has it's own bias parameters.
-        self.b_enc = nn.Parameter(torch.zeros(self.feature_size))
+        self.b_enc = nn.Parameter(torch.zeros(feat_size))
         self.b_dec = nn.Parameter(torch.zeros(self.embedding_size))
         
         # self.W_dec = nn.Parameter(torch.nn.init.kaiming_uniform_(torch.empty(feature_size - prev_feature_size, embedding_size)))
