@@ -23,7 +23,8 @@ class MLPSparsifiedGPT(SparsifiedGPT):
         loss_coefficients: Optional[LossCoefficients] = None,
         trainable_layers: Optional[tuple] = None,
     ):
-        nn.Module.__init__(self)
+        #don't actually want to call SparsifiedGPT.__init__, but we want to inherit from it
+        nn.Module.__init__(self) 
         self.config = config
         self.loss_coefficients = loss_coefficients
         self.gpt = MLP_GPT(config.gpt_config)
@@ -36,6 +37,9 @@ class MLPSparsifiedGPT(SparsifiedGPT):
         self.saes = nn.ModuleDict(dict([(key, sae_class(idx, config, loss_coefficients, self)) 
                                         for idx, key in enumerate(sae_keys)]))
        
+    
+    def post_init(self):
+        pass
         # While a nice idea, it might break other code as TopKSAE
         # has a different save format 
         # for sae_key, sae in self.saes.items():
@@ -62,6 +66,15 @@ class MLPSparsifiedGPT(SparsifiedGPT):
         #     sae.load = lambda dirpath, device, current_sae=sae: sae_load(current_sae, dirpath, device)
         
         
+    def post_sae_forward(self, 
+                activations: dict[str, torch.Tensor], 
+                encoder_outputs: dict[str, EncoderOutput]
+    ) -> dict[str, EncoderOutput]:
+        """
+        Function for future classes to override (for JSAEs) to compute additional losses
+        """
+        return encoder_outputs
+        
     def forward(
         self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False
     ) -> SparsifiedGPTOutput:
@@ -72,9 +85,14 @@ class MLPSparsifiedGPT(SparsifiedGPT):
         :param targets: Target tensor.
         :param is_eval: Whether the model is in evaluation mode.
         """
+        activations: dict[str, torch.Tensor]
+        encoder_outputs: dict[str, EncoderOutput]
+        
         with self.record_activations() as activations:
             with self.use_saes() as encoder_outputs:
                 logits, cross_entropy_loss = self.gpt(idx, targets)
+                # function for super class to override, currently does nothing
+                encoder_outputs = self.post_sae_forward(activations, encoder_outputs)
         # print(cross_entropy_loss) # Optional: Keep for debugging
         # print(self.resid_mid_cache) # Optional: Keep for debugging
         #torch.cuda.synchronize()
@@ -205,6 +223,7 @@ class MLPSparsifiedGPT(SparsifiedGPT):
 
         :param activations_to_patch: Layer indices and hook locations for patching residual stream activations with reconstructions.
         :yield encoder_outputs: Dictionary of encoder outputs.
+        key = f"{layer_idx}_{hook_loc}" e.g. 0_mlpin, 0_mlpout, 1_mlpin, 1_mlpout, etc.
         """
         # Dictionary for storing results
         encoder_outputs: dict[str, EncoderOutput] = {}
@@ -232,6 +251,7 @@ class MLPSparsifiedGPT(SparsifiedGPT):
                 hook_fn.remove()
 
     # function basically the same as SparsifiedGPT.load
+    # will still work for JSparsifiedGPT because it inherits from MLPSparsifiedGPT
     @classmethod
     def load(cls, dir, loss_coefficients=None, trainable_layers=None, device: torch.device = torch.device("cpu")):
         """
@@ -248,13 +268,17 @@ class MLPSparsifiedGPT(SparsifiedGPT):
         config.gpt_config = gpt.config
 
         # Create model using saved config
-        model = MLPSparsifiedGPT(config, loss_coefficients, trainable_layers)
+        model = cls(config, loss_coefficients, trainable_layers)
         model.gpt = gpt
 
         # Load SAE weights
         for module in model.saes.values():
             assert isinstance(module, SparseAutoencoder)
             module.load(Path(dir), device=device)
+            
+        model.post_init()
+        # allow future classes to do something here if needed
+            
 
         return model
 

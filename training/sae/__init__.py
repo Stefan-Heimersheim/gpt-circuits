@@ -89,7 +89,12 @@ class SAETrainer(Trainer):
                 grouped_l0 = (grouped_feature_magnitudes != 0).float().sum(dim=-1) # (batch, seq, n_chunks)
                 l0_per_chunk[layer_idx] = grouped_l0.mean(dim=(0,1)) # (n_chunks)
                 metrics[f"l0_{layer_idx}"] = l0_per_chunk[layer_idx]
-
+                
+        if "jsae" in self.config.sae_config.sae_variant:
+            sae_mlpout_losses = [loss for (key,loss) in output.sae_loss_components.items() if key.endswith("mlpout")]
+            jacobian_loss = [loss.aux.item() for loss in sae_mlpout_losses]
+            metrics["∇_l1"] = torch.tensor(jacobian_loss)
+            
         return metrics
 
     def train(self):
