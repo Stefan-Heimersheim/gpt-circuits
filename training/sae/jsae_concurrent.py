@@ -1,5 +1,5 @@
 """
-python -m training.sae.jsae_concurrent --config=jsae.shakespeare_64x4 --load_from=shakespeare_64x4
+python -m training.sae.jsae_concurrent --config=jsae.shakespeare_64x4 --load_from=shakespeare_64x4 --sparsity=0.02
 """
 # %%
 import argparse
@@ -23,6 +23,7 @@ import einops
 #     os.chdir("..")
 # print(os.getcwd())
 
+@torch.compile
 def get_jacobian_mlp_sae(
     sae_mlpin : SparseAutoencoder,
     sae_mlpout : SparseAutoencoder,
@@ -33,8 +34,8 @@ def get_jacobian_mlp_sae(
 ) -> torch.Tensor:
     # required to transpose mlp weights as nn.Linear stores them backwards
     # everything should be of shape (d_out, d_in)
-    wd1 = sae_mlpin.W_dec @ mlp.W_in.T
-    w2e = mlp.W_out.T @ sae_mlpout.W_enc
+    wd1 = sae_mlpin.W_dec @ mlp.W_in.T #(feat_size, d_model) @ (d_model, d_mlp) -> (feat_size, d_mlp)
+    w2e = mlp.W_out.T @ sae_mlpout.W_enc #(d_mlp, d_model) @ (d_model, feat_size) -> (d_mlp, feat_size)
 
     dtype = wd1.dtype
 
@@ -57,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=str, help="Training config")
     parser.add_argument("--load_from", type=str, help="GPT model weights to load")
     parser.add_argument("--name", type=str, help="Model name for checkpoints")
+    parser.add_argument("--sparsity", type=float, help="Jacobian sparsity loss coefficient")
     return parser.parse_args()
 
 
@@ -146,9 +148,18 @@ if __name__ == "__main__":
     config_name = args.config
     config = options[config_name]
 
-    # Update outdir
     if args.name:
         config.name = args.name
+        
+    if args.sparsity:
+        num_trainable_layers = len(config.loss_coefficients.sparsity)
+        config.loss_coefficients.sparsity = (args.sparsity, ) * num_trainable_layers
+        print(f"Setting sparsity to {args.sparsity} for all {num_trainable_layers} layers")
+        
+        config.name = f"{config.name}-sparsity-{args.sparsity:.1e}"
+        
+        # Update outdir
+
 
     # Initialize trainer
     trainer = JSaeTrainer(config, load_from=TrainingConfig.checkpoints_dir / args.load_from)
