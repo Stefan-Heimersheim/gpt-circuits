@@ -35,6 +35,7 @@ class SparsifiedGPTOutput:
     sae_loss_components: dict[int, SAELossComponents]
     feature_magnitudes: dict[int, torch.Tensor]
     reconstructed_activations: dict[int, torch.Tensor]
+    indices: dict[int, torch.Tensor] = None
 
     @property
     def sae_losses(self) -> torch.Tensor:
@@ -106,6 +107,7 @@ class SparsifiedGPT(nn.Module):
             sae_loss_components={i: output.loss for i, output in encoder_outputs.items() if output.loss},
             feature_magnitudes={i: output.feature_magnitudes for i, output in encoder_outputs.items()},
             reconstructed_activations={i: output.reconstructed_activations for i, output in encoder_outputs.items()},
+            indices={i: output.indices for i, output in encoder_outputs.items()},
         )
 
     @contextmanager
@@ -292,5 +294,7 @@ class SparsifiedGPT(nn.Module):
                 return StaircaseTopKSAE
             case SAEVariant.TOPK_STAIRCASE_DETACH:
                 return StaircaseTopKSAEDetach
+            case SAEVariant.JSAE:
+                return TopKSAE
             case _:
-                raise ValueError(f"Unrecognized SAE variant: {self.sae_variant}")
+                raise ValueError(f"Unrecognized SAE variant: {config.sae_variant}")

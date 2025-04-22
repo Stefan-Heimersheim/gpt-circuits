@@ -1,20 +1,19 @@
-import os
 import json
-from pathlib import Path
+import os
 from contextlib import contextmanager
-from typing import Optional, Type, Iterable
+from pathlib import Path
+from typing import Iterable, Optional, Type
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from safetensors.torch import save_model, load_model
+from safetensors.torch import load_model, save_model
 
-from models.mlpgpt import MLP_GPT
-from models.sparsified import SparsifiedGPT, SparsifiedGPTOutput
 from config.sae.models import SAEConfig
 from config.sae.training import LossCoefficients
-from models.sae import SparseAutoencoder, EncoderOutput 
-
+from models.mlpgpt import MLP_GPT
+from models.sae import EncoderOutput, SparseAutoencoder
+from models.sparsified import SparsifiedGPT, SparsifiedGPTOutput
 
 class MLPSparsifiedGPT(SparsifiedGPT):
     def __init__(
@@ -65,16 +64,6 @@ class MLPSparsifiedGPT(SparsifiedGPT):
         #     sae.save = lambda dirpath, current_sae=sae: sae_save(current_sae, dirpath)
         #     sae.load = lambda dirpath, device, current_sae=sae: sae_load(current_sae, dirpath, device)
         
-        
-    def post_sae_forward(self, 
-                activations: dict[str, torch.Tensor], 
-                encoder_outputs: dict[str, EncoderOutput]
-    ) -> dict[str, EncoderOutput]:
-        """
-        Function for future classes to override (for JSAEs) to compute additional losses
-        """
-        return encoder_outputs
-        
     def forward(
         self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False
     ) -> SparsifiedGPTOutput:
@@ -91,8 +80,6 @@ class MLPSparsifiedGPT(SparsifiedGPT):
         with self.record_activations() as activations:
             with self.use_saes() as encoder_outputs:
                 logits, cross_entropy_loss = self.gpt(idx, targets)
-                # function for super class to override, currently does nothing
-                encoder_outputs = self.post_sae_forward(activations, encoder_outputs)
         # print(cross_entropy_loss) # Optional: Keep for debugging
         # print(self.resid_mid_cache) # Optional: Keep for debugging
         #torch.cuda.synchronize()
@@ -128,6 +115,7 @@ class MLPSparsifiedGPT(SparsifiedGPT):
             sae_loss_components={i: output.loss for i, output in encoder_outputs.items() if output.loss},
             feature_magnitudes={i: output.feature_magnitudes for i, output in encoder_outputs.items()},
             reconstructed_activations={i: output.reconstructed_activations for i, output in encoder_outputs.items()},
+            indices={i: output.indices for i, output in encoder_outputs.items()},
         )
     
     @contextmanager

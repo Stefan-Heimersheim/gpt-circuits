@@ -3,32 +3,51 @@ python -m training.sae.jsae_concurrent --config=jsae.shakespeare_64x4 --load_fro
 """
 # %%
 import argparse
+import os
+import sys
 from pathlib import Path
 
-import sys
-import os
+import torch
 
+from config import TrainingConfig
+from config.sae.training import SAETrainingConfig, options
+from models.jsaesparsified import JSparsifiedGPT
+from models.sparsified import SparsifiedGPTOutput
+from training.sae import SAETrainer
+from training.sae.concurrent import ConcurrentTrainer
+from models.sae import SparseAutoencoder
+from models.mlpgpt import MLP
+import einops
 # Change current working directory to parent
 # while not os.getcwd().endswith("gpt-circuits"):
 #     os.chdir("..")
 # print(os.getcwd())
 
+def get_jacobian_mlp_sae(
+    sae_mlpin : SparseAutoencoder,
+    sae_mlpout : SparseAutoencoder,
+    mlp: MLP,
+    topk_indices_mlpin: torch.Tensor,
+    topk_indices_mlpout: torch.Tensor,
+    mlp_act_grads: torch.Tensor,
+) -> torch.Tensor:
+    # required to transpose mlp weights as nn.Linear stores them backwards
+    # everything should be of shape (d_out, d_in)
+    wd1 = sae_mlpin.W_dec @ mlp.W_in.T
+    w2e = mlp.W_out.T @ sae_mlpout.W_enc
 
-import torch
+    dtype = wd1.dtype
 
-from config import TrainingConfig
-from config.sae.training import SAETrainingConfig, shakespeare_64x4_defaults
+    jacobian = einops.einsum(
+        wd1[topk_indices_mlpin],
+        mlp_act_grads.to(dtype),
+        w2e[:, topk_indices_mlpout],
+        # "... seq_pos k1 d_mlp, ... seq_pos d_mlp,"
+        # "d_mlp ... seq_pos k2 -> ... seq_pos k2 k1",
+        "... k1 d_mlp, ... d_mlp, d_mlp ... k2 -> ... k2 k1",
+    )
+    return jacobian
 
-from config.sae.models import SAEConfig, SAEVariant
-from config.gpt.models import gpt_options
-from config.sae.training import options
-from config.sae.training import LossCoefficients
-
-from models.mlpsparsified import MLPSparsifiedGPT
-from models.jsaesparsified import JSparsifiedGPT
-from training.sae import SAETrainer
-from training.sae.concurrent import ConcurrentTrainer
-from training import Trainer
 
 def parse_args() -> argparse.Namespace:
     """
@@ -39,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--load_from", type=str, help="GPT model weights to load")
     parser.add_argument("--name", type=str, help="Model name for checkpoints")
     return parser.parse_args()
+
 
 class JSaeTrainer(ConcurrentTrainer):
     """
@@ -66,41 +86,57 @@ class JSaeTrainer(ConcurrentTrainer):
         if self.ddp:
             # HACK: We're doing something that causes DDP to crash unless DDP optimization is disabled.
             torch._dynamo.config.optimize_ddp = False  # type: ignore
+
+
+    def output_to_loss(self, output: SparsifiedGPTOutput) -> torch.Tensor:
+        """
+        Return an array of losses instead of a single combined loss.
+        For JSAEs: compute jacobian loss for each layer
+        As the output is required to be a tensor of losses, we
+        output the reconstruction loss for each layer (2 * n_layer many)
+        and then the jacobian loss for each layer (n_layer many)
+        for a total of 3 * n_layer losses.
+        """
+        recon_losses = output.sae_losses
+        jacobian_losses = torch.empty(len(self.model.layer_idxs), device=recon_losses.device)
+        
+        
+        for layer_idx in self.model.layer_idxs:
+            topk_indices_mlpin = output.indices[f'{layer_idx}_mlpin']
+            topk_indices_mlpout = output.indices[f'{layer_idx}_mlpout']
             
-    def train(self):
+            mlp_act_grads = output.activations[f"{layer_idx}_mlpactgrads"]
+            
+            jacobian = get_jacobian_mlp_sae(
+                sae_mlpin = self.model.saes[f'{layer_idx}_mlpin'],
+                sae_mlpout = self.model.saes[f'{layer_idx}_mlpout'],
+                mlp = self.model.gpt.transformer.h[layer_idx].mlp,
+                topk_indices_mlpin = topk_indices_mlpin,
+                topk_indices_mlpout = topk_indices_mlpout,
+                mlp_act_grads = mlp_act_grads,
+            )
+            assert self.model.saes[f'{layer_idx}_mlpin'].k == self.model.saes[f'{layer_idx}_mlpout'].k, "k values must be the same"
+            k = self.model.saes[f'{layer_idx}_mlpin'].k
+            
+            j_coeff = self.model.loss_coefficients.sparsity[layer_idx] 
+            jacobian_loss = j_coeff * torch.abs(jacobian).sum() / (k ** 2)
+            
+            # Each SAE has it's own loss term, and are trained "independently"
+            # so we will put the jacobian loss into the aux loss term
+            # for the sae_mlpout for each pair of SAEs
+            jacobian_losses[layer_idx] = jacobian_loss
+            
+        # TODO: This isn't a great solution, but it works for now
+        # jacobian_losses = torch.tensor([0,0,0,0], device=recon_losses.device)
+        losses = torch.cat([recon_losses, jacobian_losses])
+        return losses
+            
+
+    def gather_metrics(self, loss: torch.Tensor, output: SparsifiedGPTOutput) -> dict[str, torch.Tensor]:
         """
-        Reload model after done training and run eval one more time.
+        Gather metrics from loss and model output.
         """
-        # Train weights.
-        Trainer.train(self)
-        # Wait for all processes to complete training.
-        if self.ddp:
-            torch.distributed.barrier()
-
-        # Reload all checkpoint weights, which may include those that weren't trained.
-        self.model = JSparsifiedGPT.load(
-            self.config.out_dir,
-            loss_coefficients=self.config.loss_coefficients,
-            trainable_layers=None,  # Load all layers
-            device=self.config.device,
-        ).to(self.config.device)
-        # Wrap the model if using DDP
-        if self.ddp:
-            self.model = DistributedDataParallel(self.model, device_ids=[self.ddp_local_rank])  # type: ignore
-
-        # Gather final metrics. We don't bother compiling because we're just running eval once.
-        final_metrics = self.val_step(0, should_log=False)  # step 0 so checkpoint isn't saved.
-        self.checkpoint_l0s = final_metrics["l0s"]
-        self.checkpoint_ce_loss = final_metrics["ce_loss"]
-        self.checkpoint_ce_loss_increases = final_metrics["ce_loss_increases"]
-        self.checkpoint_compound_ce_loss_increase = final_metrics["compound_ce_loss_increase"]
-
-        # Summarize results
-        if self.is_main_process:
-            print(f"Final L0s: {self.pretty_print(self.checkpoint_l0s)}")
-            print(f"Final CE loss increases: {self.pretty_print(self.checkpoint_ce_loss_increases)}")
-            print(f"Final compound CE loss increase: {self.pretty_print(self.checkpoint_compound_ce_loss_increase)}")
-
+        return super().gather_metrics(loss, output)
 
 if __name__ == "__main__":
     # Parse command line arguments
