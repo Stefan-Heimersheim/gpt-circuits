@@ -16,7 +16,7 @@ from models.sparsified import SparsifiedGPTOutput
 from training.sae import SAETrainer
 from training.sae.concurrent import ConcurrentTrainer
 from models.sae import SparseAutoencoder
-from models.mlpgpt import MLP
+from models.gpt import MLP
 import einops
 # Change current working directory to parent
 # while not os.getcwd().endswith("gpt-circuits"):
