@@ -89,7 +89,7 @@ class JSaeTrainer(ConcurrentTrainer):
             # HACK: We're doing something that causes DDP to crash unless DDP optimization is disabled.
             torch._dynamo.config.optimize_ddp = False  # type: ignore
 
-
+    # TODO: This is a very expensive operation, we should try to speed it up
     def output_to_loss(self, output: SparsifiedGPTOutput) -> torch.Tensor:
         """
         Return an array of losses instead of a single combined loss.
