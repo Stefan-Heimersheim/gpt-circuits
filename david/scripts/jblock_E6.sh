@@ -1,12 +1,5 @@
 # E6 series: 1.0, 1.5, 2.2, 3.3, 4.7, 6.8
 
-/workspace/HOME/guest/.conda/envs/spar/bin/python -m training.sae.jsae_block --sparsity=1.0
-/workspace/HOME/guest/.conda/envs/spar/bin/python -m training.sae.jsae_block --sparsity=1.5
-/workspace/HOME/guest/.conda/envs/spar/bin/python -m training.sae.jsae_block --sparsity=2.2
-/workspace/HOME/guest/.conda/envs/spar/bin/python -m training.sae.jsae_block --sparsity=3.3
-/workspace/HOME/guest/.conda/envs/spar/bin/python -m training.sae.jsae_block --sparsity=4.7
-/workspace/HOME/guest/.conda/envs/spar/bin/python -m training.sae.jsae_block --sparsity=6.8
-
 /workspace/HOME/guest/.conda/envs/spar/bin/python -m training.sae.jsae_block --sparsity=1.0e-1
 /workspace/HOME/guest/.conda/envs/spar/bin/python -m training.sae.jsae_block --sparsity=1.5e-1
 /workspace/HOME/guest/.conda/envs/spar/bin/python -m training.sae.jsae_block --sparsity=2.2e-1
