@@ -13,25 +13,42 @@ from safetensors.torch import load_model, save_model
 
 from config.sae.models import SAEConfig, SAEVariant
 from config.sae.training import LossCoefficients
-from models.gpt import MLP
-from models.mlpsparsified import MLPSparsifiedGPT
+from models.gpt import GPT, MLP
+from config.gpt.models import NormalizationStrategy
+from models.sparsified import SparsifiedGPT
 from models.sae import EncoderOutput, SparseAutoencoder
 from models.sparsified import SparsifiedGPTOutput
 import torch.nn.functional as F
 
+from models.jsaesparsified import JSparsifiedGPT
+
 from jaxtyping import Float
 from torch import Tensor
-from typing import Callable
-
-class JSparsifiedGPT(MLPSparsifiedGPT):
+from typing import Literal
+class JBlockSparsifiedGPT(SparsifiedGPT):
     def __init__(
         self, 
         config: SAEConfig,
         loss_coefficients: Optional[LossCoefficients] = None,
         trainable_layers: Optional[tuple] = None,
     ):
-        super().__init__(config, loss_coefficients, trainable_layers)
         assert config.sae_variant == SAEVariant.JSAE , f"Only topk SAEs are supported for now: {config.sae_variant}"
+        
+        nn.Module.__init__(self) 
+        self.config = config
+        self.loss_coefficients = loss_coefficients
+        config.gpt_config.norm_strategy = NormalizationStrategy.DYNAMIC_TANH
+        self.gpt = GPT(config.gpt_config)
+        
+        assert len(config.n_features) == self.gpt.config.n_layer * 2
+        self.layer_idxs = trainable_layers if trainable_layers else list(range(self.gpt.config.n_layer))
+        sae_keys = [f'{x}_{y}' for x in self.layer_idxs for y in ['residmid', 'residpost']]
+        
+        sae_class: Type[SparseAutoencoder] = self.get_sae_class(config)
+        
+        self.saes = nn.ModuleDict(dict([(key, sae_class(idx, config, loss_coefficients, self)) 
+                                        for idx, key in enumerate(sae_keys)]))
+        
     
     def forward(
         self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False
@@ -56,11 +73,8 @@ class JSparsifiedGPT(MLPSparsifiedGPT):
         if is_eval and targets is not None:
             # Calculate cross-entropy loss increase for each SAE pair
             ce_loss_increases = []
-            for layer_idx in self.layer_idxs:
-                recon_pre_mlp = encoder_outputs[f'{layer_idx}_mlpin'].reconstructed_activations
-                resid_mid = activations[f'{layer_idx}_residmid']
-
-                sae_logits = self.forward_with_patched_pair(recon_pre_mlp, resid_mid, layer_idx)
+            for sae_key, output in encoder_outputs.items():
+                sae_logits = self.forward_with_patched_activations(output.reconstructed_activations, sae_key)    
                 sae_ce_loss = F.cross_entropy(sae_logits.view(-1, sae_logits.size(-1)), targets.view(-1))
                 ce_loss_increases.append(sae_ce_loss - cross_entropy_loss)
             ce_loss_increases = torch.stack(ce_loss_increases)
@@ -82,54 +96,78 @@ class JSparsifiedGPT(MLPSparsifiedGPT):
             indices={i: output.indices for i, output in encoder_outputs.items()},
         )
     
-    def forward_with_patched_pair(self, 
-                                recon_pre_mlp: Float[Tensor, "B T n_embd"], 
-                                resid_mid: Float[Tensor, "B T n_embd"],
-                                layer_idx: int) -> torch.Tensor:
+    def forward_with_patched_activations(self, 
+                                recon: Float[Tensor, "B T n_embd"], 
+                                sae_key: str) -> torch.Tensor:
         """
-        Forward pass of the model with patched activations, using a pair of reconstructed activations.
-        :param recon_pre_mlp: Reconstructed activations just before the MLP. Shape: (B, T, n_embd)
-        :param recon_post_mlp: Reconstructed activations just after the MLP. Shape: (B, T, n_embd)
-        :param resid_mid: Residual stream activations at the middle of the transformer block. Shape: (B, T, n_embd)
-        :param layer_idx: Layer index. 0 patches activations just before the first transformer block.
+        Forward pass of the model with patched activations.
         """
-        assert isinstance(recon_pre_mlp, torch.Tensor), f"recon_pre_mlp: {recon_pre_mlp}"
-        assert isinstance(resid_mid, torch.Tensor), f"resid_mid: {resid_mid}"
+        layer_idx, hook_loc = self.split_sae_key(sae_key)
         
-        post_mlp = self.gpt.transformer.h[layer_idx].mlp(recon_pre_mlp)
-        post_mlp_recon = self.saes[f'{layer_idx}_mlpout'](post_mlp).reconstructed_activations
+        if hook_loc == 'residmid':
+            block = self.gpt.transformer.h[layer_idx]
+            recon = block.mlp(block.ln_2(recon))
         
-        resid_post = post_mlp_recon + resid_mid
+        elif hook_loc == 'residpost':
+            pass
         
-        return self.gpt.forward(resid_post, start_at_layer=layer_idx+1).logits
+        else:
+            raise ValueError(f"Invalid hook location: {hook_loc}")
+        
+        return self.gpt.forward(recon, start_at_layer=layer_idx+1).logits
+            
     
     @contextmanager
     def record_activations(self):
         """
         Context manager for recording residual stream activations.
-
-        :yield activations: Dictionary of activations.
-        activations[f'{layer_idx}_mlpin'] = h[layer_idx].mlpin
-        activations[f'{layer_idx}_mlpout'] = h[layer_idx].mlpout
         """
         act: dict[str, torch.Tensor] = {}
 
         # Register hooks
         hooks = []
         for layer_idx in self.layer_idxs:
-            mlp = self.gpt.transformer.h[layer_idx].mlp
-            ln2 = self.gpt.transformer.h[layer_idx].ln_2
-            mlp_act_fn = self.gpt.transformer.h[layer_idx].mlp.gelu
+            block = self.gpt.transformer.h[layer_idx]
             
-            self.make_cache_post_hook(hooks, act, mlp, key_in = f"{layer_idx}_mlpin", 
-                                                        key_out = f"{layer_idx}_mlpout")
-            self.make_cache_pre_hook(hooks, act, ln2, key_in = f"{layer_idx}_residmid")        
-            self.make_grad_hook(hooks, act, mlp_act_fn, key = f"{layer_idx}_mlpactgrads")
+            self.make_cache_post_hook(hooks, act, block, key_out = f"{layer_idx}_residpost")       
+            self.make_grad_hook(hooks, act, block.mlp.gelu, key = f"{layer_idx}_mlpactgrads")
+            # Adding two hooks is okay, will execute in order
+            self.make_cache_pre_hook(hooks, act, block.ln_2, key_in = f"{layer_idx}_residmid") 
+            self.make_grad_hook(hooks, act, block.ln_2, key = f"{layer_idx}_normactgrads")
     
         try:
             yield act
 
         finally:
             # Unregister hooks
+            for hook_fn in hooks:
+                hook_fn.remove()
+                
+    @contextmanager
+    def use_saes(self, activations_to_patch: Iterable[str] = ()):
+        """
+        Context manager for using SAE layers during the forward pass.
+
+        :param activations_to_patch: Layer indices and hook locations for patching residual stream activations with reconstructions.
+        :yield encoder_outputs: Dictionary of encoder outputs.
+        key = f"{layer_idx}_{hook_loc}" e.g. 0_mlpin, 0_mlpout, 1_mlpin, 1_mlpout, etc.
+        """
+        encoder_outputs: dict[str, EncoderOutput] = {}
+
+        hooks = []
+        for layer_idx in self.layer_idxs:
+
+            block = self.gpt.transformer.h[layer_idx]
+
+            sae_key = f'{layer_idx}_residmid'
+            self.make_sae_pre_hook(hooks, encoder_outputs, block.ln_2, sae_key, activations_to_patch)
+            
+            sae_key = f'{layer_idx}_residpost'
+            self.make_sae_post_hook(hooks, encoder_outputs, block, sae_key, activations_to_patch)
+            
+        try:
+            yield encoder_outputs
+
+        finally:
             for hook_fn in hooks:
                 hook_fn.remove()
