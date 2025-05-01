@@ -73,8 +73,9 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
         if is_eval and targets is not None:
             # Calculate cross-entropy loss increase for each SAE pair
             ce_loss_increases = []
-            for sae_key, output in encoder_outputs.items():
-                sae_logits = self.forward_with_patched_activations(output.reconstructed_activations, sae_key)    
+            for layer_idx in self.layer_idxs:
+                sae_key = f"{layer_idx}_residmid"
+                sae_logits = self.forward_with_patched_activations(encoder_outputs[sae_key].reconstructed_activations, sae_key)
                 sae_ce_loss = F.cross_entropy(sae_logits.view(-1, sae_logits.size(-1)), targets.view(-1))
                 ce_loss_increases.append(sae_ce_loss - cross_entropy_loss)
             ce_loss_increases = torch.stack(ce_loss_increases)
@@ -106,15 +107,15 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
         
         if hook_loc == 'residmid':
             block = self.gpt.transformer.h[layer_idx]
-            recon = block.mlp(block.ln_2(recon))
+            resid_post = block.mlp(block.ln_2(recon)) + recon
         
         elif hook_loc == 'residpost':
-            pass
+            resid_post = recon
         
         else:
             raise ValueError(f"Invalid hook location: {hook_loc}")
         
-        return self.gpt.forward(recon, start_at_layer=layer_idx+1).logits
+        return self.gpt.forward(resid_post, start_at_layer=layer_idx+1).logits
             
     
     @contextmanager

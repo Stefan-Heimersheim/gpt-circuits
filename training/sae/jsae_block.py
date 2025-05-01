@@ -173,17 +173,6 @@ class JSaeBlockTrainer(JSaeTrainer, Trainer):
         losses = pair_losses + j_coeffs * jacobian_losses # (layer)
         return losses
 
-
-    def gather_metrics(self, loss: torch.Tensor, output: SparsifiedGPTOutput) -> dict[str, torch.Tensor]:
-        """
-        Gather metrics from loss and model output.
-        """
-        metrics =  super().gather_metrics(loss, output)
-        metrics["∇_l1"] = output.sparsity_losses
-        metrics["recon_l2"] = output.recon_losses
-
-        return metrics
-
 if __name__ == "__main__":
     # Parse command line arguments
     args = parse_args()
