@@ -44,6 +44,7 @@ class Attributor():
         :param nbatches: How many batches of data to aggregate into attributions
         :param verbose: Prints updates after finishing each layer connection
         """
+
         self.model = model
         self.dataloader = dataloader
         self.nbatches = nbatches
@@ -199,11 +200,14 @@ class IntegratedGradientAttributor(Attributor):
                         attributions[:,fm_i] = attributions[:,fm_i] + (gradient.abs()).sum(dim=[0,1])
                 else:
                     if self.just_last:
+                        
                         attributions[:,fm_i] = attributions[:,fm_i] + (gradient**2).sum(dim=0)
                     else: 
+                        
                         attributions[:,fm_i] = attributions[:,fm_i] + (gradient**2).sum(dim=[0,1])
                     
-                    attributions = t.sqrt(attributions)
+        if not self.abs:
+            attributions = t.sqrt(attributions)
         return attributions
 
     def integrate_gradient(self, x: Tensor, x_i: Tensor | None, fun: TensorFunction, direction, base = None):
@@ -241,7 +245,7 @@ class IntegratedGradientAttributor(Attributor):
 
         integral = 0
         for alpha in path:
-            point = (alpha*x + (1-alpha)*base).detach() #Find point on path
+            point = alpha*x + (1-alpha)*base #Find point on path
             point.requires_grad_()
             y = fun(point)  #compute gradient of y wrt x, scale by length of a step
             
@@ -257,7 +261,7 @@ class IntegratedGradientAttributor(Attributor):
                     
                 else:
                     if self.just_last:
-                        integral += (g.detach()[: :-1, :]* x_i).sum(dim=-1) * steplength #(batchsize)
+                        integral += (g.detach()[:, -1, :]* x_i).sum(dim=-1) * steplength #(batchsize)
                     else:
                         integral += (g.detach() * x_i).sum(dim=-1) * steplength #(batchsize, seqlen)
         return integral

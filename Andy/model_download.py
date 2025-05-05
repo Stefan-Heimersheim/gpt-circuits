@@ -4,7 +4,7 @@ from huggingface_hub import upload_file
 
 
 
-sparsities = ['1.0e-03', '1.2e-03','1.5e-03', '1.8e-03', '2.2e-03', '2.7e-03', '3.3e-03', '3.9e-03', '4.7e-03', '5.6e-03', '6.8e-03', '1.0e-02']
+sparsities = []
 #sparsities = ['1.0e-04', '1.0e-05', '1.0e-06', '1.0e-07', '1.0e-08', '1.0ep00', '1.0ep01', 
 #'3.3e-02', '3.3e-04', '3.3e-05', '3.3e-06', '3.3e-07', '3.3e-08', '3.3ep00', '3.3e-01', '0.0ep00']
 
@@ -31,5 +31,5 @@ with open('commands.txt', 'w') as f:
             #path_in_repo="jsae.shakespeare_64x4-sparsity-" + sparsity + "-20k.safetensors",
             #repo_id=repo_id,
             #repo_type="dataset"
-        )
+        #)
        # print(f"uploaded file at {path}")
