@@ -95,7 +95,7 @@ def main():
     num_samples = 2
 
     print(f"Computing upstream & downstream magnitudes (full circuit)...")
-    with model.use_saes(layers_to_patch=[layer_num, layer_num + 1]) as encoder_outputs:
+    with model.use_saes(activations_to_patch=[layer_num, layer_num + 1]) as encoder_outputs:
         _ = model(input_ids)
         upstream_magnitudes = encoder_outputs[layer_num].feature_magnitudes
         downstream_magnitudes = encoder_outputs[layer_num + 1].feature_magnitudes

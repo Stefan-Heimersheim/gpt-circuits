@@ -129,7 +129,7 @@ def main():
     
     print(f"Computing upstream & downstream magnitudes (full circuit)...")
     with torch.no_grad():    
-        with model.use_saes(layers_to_patch=[upstream_layer_num, upstream_layer_num + 1]) as encoder_outputs:
+        with model.use_saes(activations_to_patch=[upstream_layer_num, upstream_layer_num + 1]) as encoder_outputs:
             _ = model(input_ids)
             upstream_magnitudes = encoder_outputs[upstream_layer_num].feature_magnitudes
             downstream_magnitudes_full_circuit = encoder_outputs[upstream_layer_num + 1].feature_magnitudes

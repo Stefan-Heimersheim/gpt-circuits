@@ -26,3 +26,6 @@ myenv/
 xavier/experiments/data/
 xavier/experiments/logs/
 xavier/experiments/plots/
+
+# David
+wandb/*

@@ -105,7 +105,7 @@ class SparsifiedGPT(nn.Module):
             ce_loss_increases = torch.stack(ce_loss_increases)
 
             # Calculate compound cross-entropy loss as a result of patching activations.
-            with self.use_saes(layers_to_patch=self.layer_idxs):
+            with self.use_saes(activations_to_patch=self.layer_idxs):
                 _, compound_cross_entropy_loss = self.gpt(idx, targets)
                 compound_ce_loss_increase = compound_cross_entropy_loss - cross_entropy_loss
 

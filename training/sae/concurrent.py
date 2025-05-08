@@ -22,8 +22,9 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, help="Training config")
-    parser.add_argument("--load_from", type=str, help="GPT model weights to load")
+    parser.add_argument("--load_from", type=str, help="GPT model weights to load", default='shakespeare_64x4')
     parser.add_argument("--name", type=str, help="Model name for checkpoints")
+    parser.add_argument("--max_steps", type=int, help="Maximum number of steps to train")
     return parser.parse_args()
 
 
@@ -85,6 +86,9 @@ if __name__ == "__main__":
     # Update outdir
     if args.name:
         config.name = args.name
+
+    if args.max_steps:
+        config.max_steps = args.max_steps
 
     # Initialize trainer
     trainer = ConcurrentTrainer(config, load_from=TrainingConfig.checkpoints_dir / args.load_from)

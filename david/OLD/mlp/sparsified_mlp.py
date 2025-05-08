@@ -57,11 +57,11 @@ class SparsifiedMLPGPT(SparsifiedGPT):
         return activation_hook
 
     @contextmanager
-    def use_saes(self, layers_to_patch: Iterable[int] = ()):
+    def use_saes(self, activations_to_patch: Iterable[int] = ()):
         """
         Context manager for using SAE layers during the forward pass.
 
-        :param layers_to_patch: Layer indices for patching residual stream activations with reconstructions.
+        :param activations_to_patch: Layer indices for patching residual stream activations with reconstructions.
         :yield encoder_outputs: Dictionary of encoder outputs.
         """
         # Dictionary for storing results
@@ -74,7 +74,7 @@ class SparsifiedMLPGPT(SparsifiedGPT):
             sae = self.saes[f"{layer_idx}"]
             # Output values will be overwritten (hack to pass object by reference)
             output = EncoderOutput(torch.tensor(0), torch.tensor(0))
-            should_patch_activations = layer_idx in layers_to_patch
+            should_patch_activations = layer_idx in activations_to_patch
             if layer_idx % 2 == 0:
                 hook = self.create_sae_pre_hook(sae, output, should_patch_activations)
                 hooks.append(target.register_forward_pre_hook(hook))  # type: ignore

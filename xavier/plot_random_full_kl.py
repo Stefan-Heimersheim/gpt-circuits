@@ -88,7 +88,7 @@ def main():
     assert input_ids.shape[1] <= model.config.gpt_config.block_size, "Input sequence length exceeds block size"
 
     print(f"Computing upstream & downstream magnitudes (full circuit)...")
-    with model.use_saes(layers_to_patch=[layer_num, layer_num + 1]) as encoder_outputs:
+    with model.use_saes(activations_to_patch=[layer_num, layer_num + 1]) as encoder_outputs:
         _ = model(input_ids)
         upstream_magnitudes = encoder_outputs[layer_num].feature_magnitudes
         downstream_magnitudes = encoder_outputs[layer_num + 1].feature_magnitudes

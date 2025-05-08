@@ -36,21 +36,23 @@ heatmap_data_2 = create_heatmap_data(l0_values_2)
 vmin, vmax = 0, 10
 
 # Plot heatmaps
-fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+fig, axes = plt.subplots(1, 2, figsize=(7, 3))
 
-sns.heatmap(heatmap_data_1, annot=True, fmt=".4f", cmap="coolwarm", linewidths=0.5, 
+sns.heatmap(heatmap_data_1, annot=True, fmt=".2f", cmap="coolwarm", linewidths=0.5, 
             mask=np.isnan(heatmap_data_1), ax=axes[0], vmin=vmin, vmax=vmax)
-axes[0].set_xlabel("Index within chunk")
-axes[0].set_ylabel("L0 Chunk Index")
-axes[0].set_title("L0 per chunk, Staircase SAE")
+axes[0].set_xlabel("Chunk Index", fontsize=10)
+axes[0].set_ylabel("Activation Index", fontsize=10)
+axes[0].set_title("L0 per chunk, Staircase SAE", fontsize=10)
 
-sns.heatmap(heatmap_data_2, annot=True, fmt=".4f", cmap="coolwarm", linewidths=0.5, 
+sns.heatmap(heatmap_data_2, annot=True, fmt=".2f", cmap="coolwarm", linewidths=0.5, 
             mask=np.isnan(heatmap_data_2), ax=axes[1], vmin=vmin, vmax=vmax)
-axes[1].set_xlabel("Index within chunk")
-axes[1].set_ylabel("L0 Chunk Index")
-axes[1].set_title("L0 per chunk, Staircase SAE (Detached Gradients)")
+axes[1].set_xlabel("Chunk Index", fontsize=10)
+axes[1].set_ylabel("Activation Index", fontsize=10)
+axes[1].set_title("L0 per chunk, Staircase SAE (Detached)", fontsize=10)
 
 plt.tight_layout()
+plt.savefig("l0_per_chunk.svg", dpi=300)
 plt.show()
+
 
 # %%
