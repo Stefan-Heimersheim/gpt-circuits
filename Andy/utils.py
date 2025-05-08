@@ -1,4 +1,13 @@
 import torch
+import torch.nn as nn
+
+class SkipModule(nn.Module):
+    def __init__(self, m1):
+        super().__init__()
+        self.m1 = m1
+
+    def forward(self, x):
+        return x + self.m1(x)
 
 class MaxSizeList():
     def __init__(self, max_size: int):
@@ -103,6 +112,40 @@ def get_SAE_activations_MLP(model, data, layers):
         if 2*model_layer + 1 in layers:
             activations[2*model_layer + 1] = model.saes[f'{2*model_layer + 1}'].encode(y)
         x = x + y
+        model_layer += 1
+    return activations
+
+
+def get_SAE_activations_MLP_LAYER(model, data, layers):
+    # Get the activations for the specified layers
+    activations = {}
+    max_layer = max(layers)
+    assert max_layer < 2*model.gpt.config.n_layer, f"SAE Layer {max_layer} is out of range for the model with {2*model.gpt.config.n_layer} SAE layers "
+    B, T = data.size()
+    assert (
+        T <= model.config.block_size
+    ), f"Cannot forward sequence of length {T}, block size is only {model.config.block_size}"
+    # forward the token and posisition embeddings
+    pos = torch.arange(0, T, dtype=torch.long, device=data.device)  # shape (T)
+    pos_emb = model.gpt.transformer.wpe(pos)  # position embeddings of shape (T, n_embd)
+    tok_emb = model.gpt.transformer.wte(data)  # token embeddings of shape (B, T, n_embd)
+
+    x = tok_emb + pos_emb
+    model_layer = 0
+    while model_layer < model.gpt.config.n_layer and 2*model_layer +1 <= max_layer:
+        block = model.gpt.transformer.h[model_layer]
+
+        x = x + block.attn(block.ln_1(x))
+        
+        
+
+        if 2*model_layer in layers:
+            activations[2*model_layer] = model.saes[f'{2*model_layer}'].encode(x)
+
+        x = x + block.mlp(block.ln_2(x)) 
+
+        if 2*model_layer + 1 in layers:
+            activations[2*model_layer + 1] = model.saes[f'{2*model_layer + 1}'].encode(x)
         model_layer += 1
     return activations
 

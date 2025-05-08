@@ -1,4 +1,4 @@
-from attributor import IntegratedGradientAttributor, ManualAblationAttributor
+from attributor import IntegratedGradientAttributor, ManualAblationAttributor, PathType
 import os
 import json
 import sys
@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--load_from", type=str, help="Model weights to load")
     parser.add_argument("--save_to", type=str, help="Path to save the attributions")
     parser.add_argument("--data_dir", type=str, help="Directory containing the data")
+    parser.add_argument("--path_type", type = str, help="BLOCK, MLP, or MLP_LAYER")
 
     parser.add_argument("--attribution_method", type=str, choices=["ig", "ma"], default = 'ig', help="Attribution method to use, either 'ig' or 'ma'")
 
@@ -56,7 +57,9 @@ if __name__ == "__main__":
     data_dir = args.data_dir
     batch_size = args.batch_size
 
-
+    pathtype = args.path_type
+    if pathtype not in [PathType.BLOCK, PathType.MLP, PathType.MLP_LAYER]:
+        print(f"Unrecognized path type {pathtype}")
 
     dataloader = TrainingDataLoader(
         dir_path=data_dir,
@@ -68,7 +71,7 @@ if __name__ == "__main__":
     )
 
     if args.attribution_method == "ig":
-        attributor = IntegratedGradientAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, steps=args.steps)
+        attributor = IntegratedGradientAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, steps=args.steps, pathtype = pathtype)
         attributions = attributor.layer_by_layer()
     elif args.attribution_method == "ma":
         attributor = ManualAblationAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, epsilon=args.epsilon)

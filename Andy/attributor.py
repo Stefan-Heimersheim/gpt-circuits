@@ -13,7 +13,7 @@ import einops
 
 from enum import Enum
 
-from utils import MaxSizeList, get_SAE_activations
+from utils import MaxSizeList, get_SAE_activations, SkipModule
 
 from models.gpt import GPT
 from models.sparsified import SparsifiedGPT, SparsifiedGPTOutput
@@ -34,9 +34,10 @@ TensorFunction = Callable[[Tensor], Tensor]
 class PathType(Enum):
     BLOCK = "block"
     MLP = "MLP"
+    MLP_LAYER = "MLP_LAYER"
 
 class Attributor():
-    def __init__(self, model: nn.Module,  dataloader: TrainingDataLoader, nbatches: int = 32, verbose = False):
+    def __init__(self, model: nn.Module,  dataloader: TrainingDataLoader, nbatches: int = 32, verbose = False, pathtype = None):
         """
         Returns a dict of all consecutive integrated gradient attributions for a model. Most of the time, this is what you will call.
         :param model: SparsifiedGPT model
@@ -51,10 +52,14 @@ class Attributor():
         self.verbose = verbose
         self.attributions = {}
 
-        if model.config.sae_variant.startswith('jsae') or model.config.sae_variant.startswith('mlp'):
-            self.paths = PathType.MLP
-        else:  
-            self.paths = PathType.BLOCK
+        #This is a mess. Fix later
+        if pathtype == None:
+            if model.config.sae_variant.startswith('jsae') or model.config.sae_variant.startswith('mlp'):
+                self.paths = PathType.MLP
+            else:  
+                self.paths = PathType.BLOCK
+        else:
+            self.paths = pathtype
         
         
 
@@ -74,6 +79,14 @@ class Attributor():
                 if self.verbose:
                     print(f"Finished Connections from Layer {i} to {i+1}")
             return self.attributions
+        elif self.paths == PathType.MLP_LAYER:
+            for i in range(0, 2*layers, 2):
+                self.attributions[f'{i}-{i+1}'] = self.single_layer(i, i+1)
+                self.dataloader.reset()
+                if self.verbose:
+                    print(f"Finished Connections from Layer {i} to {i+1}")
+            return self.attributions
+
     def single_layer(self, layer0, layer1):
         pass
     
@@ -100,6 +113,7 @@ class Attributor():
             forward_list = [Sae0Decode()] + [self.model.gpt.transformer.h[i] for i in range(layer0, layer1)] + [Sae1Encode()]
             forward = t.nn.Sequential(*forward_list)
             return forward
+
         elif self.paths == PathType.MLP:
             assert layer0 + 1 ==  layer1
             assert layer0%2 == 0
@@ -118,10 +132,14 @@ class Attributor():
             forward = t.nn.Sequential(*forward_list)
             return forward
 
-            
+        elif self.paths == PathType.MLP_LAYER:
+            assert layer0 + 1 ==  layer1
+            assert layer0%2 == 0
+            assert layer1 <= 2*self.model.gpt.config.n_layer
 
-            #define function that goes from feature magnitudes in layer0 to feature magnitudes in layer1
-            #Q: Is this good form? I need it to make my Sequential object below
+            block = layer0//2
+            sae0 = self.model.saes[f'{layer0}']
+            sae1 = self.model.saes[f'{layer1}']
             class Sae0Decode(nn.Module):
                 def forward(self, x):
                     return sae0.decode(x)
@@ -130,10 +148,17 @@ class Attributor():
                 def forward(self, x):
                     return sae1.encode(x)
 
-            #construct function from Sae0 to Sae1
-            forward_list = [Sae0Decode()] + [self.model.gpt.transformer.h[i] for i in range(layer0, layer1)] + [Sae1Encode()]
+            skip_list = [self.model.gpt.transformer.h[block].ln_2 ,self.model.gpt.transformer.h[block].mlp]
+            skip = t.nn.Sequential(*skip_list)
+            skip_path = SkipModule(skip)
+            forward_list = [Sae0Decode(), skip_path, Sae1Encode()]
             forward = t.nn.Sequential(*forward_list)
+
             return forward
+
+            
+
+
 
 class IntegratedGradientAttributor(Attributor):
     def __init__(self, model: nn.Module,  dataloader: TrainingDataLoader, nbatches: int = 32, steps = 10, verbose = False, abs = False, just_last = False):
