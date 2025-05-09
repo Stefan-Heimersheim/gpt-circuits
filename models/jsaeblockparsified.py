@@ -32,7 +32,7 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
         loss_coefficients: Optional[LossCoefficients] = None,
         trainable_layers: Optional[tuple] = None,
     ):
-        assert config.sae_variant == SAEVariant.JSAE , f"Only topk SAEs are supported for now: {config.sae_variant}"
+        assert config.sae_variant == SAEVariant.JSAE_BLOCK, f"You must use JSAE_BLOCK variant. See JSparsifiedGPT/SparsifiedGPT for other variants."
         
         nn.Module.__init__(self) 
         self.config = config

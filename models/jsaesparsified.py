@@ -31,7 +31,7 @@ class JSparsifiedGPT(MLPSparsifiedGPT):
         trainable_layers: Optional[tuple] = None,
     ):
         super().__init__(config, loss_coefficients, trainable_layers)
-        assert config.sae_variant == SAEVariant.JSAE , f"JSparsifiedGPT: Only topk SAEs are supported for now: {config.sae_variant}"
+        assert config.sae_variant == SAEVariant.JSAE , f"JSparsifiedGPT: You must use JSAE variant. See JBlockSparsifiedGPT/SparsifiedGPT for other variants."
     
     def forward(
         self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False

@@ -76,6 +76,10 @@ class SparsifiedGPT(nn.Module):
         self.layer_idxs = trainable_layers if trainable_layers else list(range(len(config.n_features)))
         self.saes = nn.ModuleDict(dict([(f"{i}", sae_class(i, config, loss_coefficients, self)) for i in self.layer_idxs]))
         self.config.sae_keys = tuple(self.saes.keys())
+        
+        assert config.sae_variant != SAEVariant.JSAE, f"JSAE not supported for SparsifiedGPT. See JSparsifiedGPT."
+        assert config.sae_variant != SAEVariant.JSAE_BLOCK, f"JSAE_BLOCK not supported for SparsifiedGPT. See JBlockSparsifiedGPT."
+        
 
     def forward(
         self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False
@@ -375,6 +379,8 @@ class SparsifiedGPT(nn.Module):
             case SAEVariant.TOPK_STAIRCASE_DETACH:
                 return StaircaseTopKSAEDetach
             case SAEVariant.JSAE:
+                return TopKSAE
+            case SAEVariant.JSAE_BLOCK:
                 return TopKSAE
             case _:
                 raise ValueError(f"Unrecognized SAE variant: {config.sae_variant}")
