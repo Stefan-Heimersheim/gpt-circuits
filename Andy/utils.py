@@ -1,5 +1,13 @@
 import torch
 import torch.nn as nn
+from enum import Enum
+
+
+class PathType(Enum):
+    BLOCK = "block"
+    MLP = "MLP"
+    MLP_LAYER = "MLP_LAYER"
+
 
 class SkipModule(nn.Module):
     def __init__(self, m1):
@@ -47,11 +55,13 @@ def sorted_indices_by_value(tensor: torch.Tensor) -> list[tuple[int, int]]:
 
     return indices
 
-def get_SAE_activations(model, data, layers):
-    if model.config.sae_variant.startswith('jsae') or model.config.sae_variant.startswith('mlp'):
+def get_SAE_activations(model, path, data, layers):
+    if path == PathType.MLP:
         return get_SAE_activations_MLP(model, data, layers)
-    else:  
+    elif path == PathType.BLOCK:  
         return get_SAE_activations_BLOCK(model, data, layers)
+    elif path == PathType.MLP_LAYER:
+        return get_SAE_activations_MLP_LAYER(model, data, layers)
 
 
 @torch.no_grad()
@@ -87,7 +97,7 @@ def get_SAE_activations_MLP(model, data, layers):
     # Get the activations for the specified layers
     activations = {}
     max_layer = max(layers)
-    assert max_layer < 2*model.gpt.config.n_layer, f"SAE Layer {max_layer} is out of range for the model with {2*model.gpt.config.n_layer} SAE layers "
+    assert max_layer < model.gpt.config.n_layer, f"SAE Layer {max_layer} is out of range for the model with {model.gpt.config.n_layer} layers "
     B, T = data.size()
     assert (
         T <= model.config.block_size
@@ -99,18 +109,18 @@ def get_SAE_activations_MLP(model, data, layers):
 
     x = tok_emb + pos_emb
     model_layer = 0
-    while model_layer < model.gpt.config.n_layer and 2*model_layer +1 <= max_layer:
+    while model_layer <= max_layer:
         block = model.gpt.transformer.h[model_layer]
 
         x = x + block.attn(block.ln_1(x))
         
         y = block.ln_2(x)
 
-        if 2*model_layer in layers:
-            activations[2*model_layer] = model.saes[f'{2*model_layer}'].encode(y)
+        if model_layer in layers:
+            activations[model_layer] = model.saes[f'{model_layer}_mlpin'].encode(y)
         y = block.mlp(y)
-        if 2*model_layer + 1 in layers:
-            activations[2*model_layer + 1] = model.saes[f'{2*model_layer + 1}'].encode(y)
+        if model_layer in layers:
+            activations[f"{model_layer}_post"] = model.saes[f'{model_layer}_mlpout'].encode(y)
         x = x + y
         model_layer += 1
     return activations
@@ -120,8 +130,11 @@ def get_SAE_activations_MLP_LAYER(model, data, layers):
     # Get the activations for the specified layers
     activations = {}
     max_layer = max(layers)
-    assert max_layer < 2*model.gpt.config.n_layer, f"SAE Layer {max_layer} is out of range for the model with {2*model.gpt.config.n_layer} SAE layers "
+    assert max_layer < model.gpt.config.n_layer, f"SAE Layer {max_layer} is out of range for the model with {model.gpt.config.n_layer} layers "
     B, T = data.size()
+
+    #print(f'{data.device=}')
+    #print(f'{model.gpt.transformer.wpe.weight.device=}')
     assert (
         T <= model.config.block_size
     ), f"Cannot forward sequence of length {T}, block size is only {model.config.block_size}"
@@ -132,20 +145,18 @@ def get_SAE_activations_MLP_LAYER(model, data, layers):
 
     x = tok_emb + pos_emb
     model_layer = 0
-    while model_layer < model.gpt.config.n_layer and 2*model_layer +1 <= max_layer:
+    while model_layer <= max_layer:
         block = model.gpt.transformer.h[model_layer]
 
         x = x + block.attn(block.ln_1(x))
         
-        
-
-        if 2*model_layer in layers:
-            activations[2*model_layer] = model.saes[f'{2*model_layer}'].encode(x)
+        if model_layer in layers:
+            activations[model_layer] = model.saes[f'{model_layer}_residmid'].encode(x)
 
         x = x + block.mlp(block.ln_2(x)) 
 
-        if 2*model_layer + 1 in layers:
-            activations[2*model_layer + 1] = model.saes[f'{2*model_layer + 1}'].encode(x)
+        if model_layer in layers:
+            activations[f'{model_layer}_post'] = model.saes[f'{model_layer}_residpost'].encode(x)
         model_layer += 1
     return activations
 

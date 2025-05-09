@@ -13,7 +13,7 @@ import einops
 
 from enum import Enum
 
-from utils import MaxSizeList, get_SAE_activations, SkipModule
+from utils import MaxSizeList, get_SAE_activations, SkipModule, PathType
 
 from models.gpt import GPT
 from models.sparsified import SparsifiedGPT, SparsifiedGPTOutput
@@ -31,13 +31,10 @@ from typing import Callable
 from data.dataloaders import TrainingDataLoader
 TensorFunction = Callable[[Tensor], Tensor]
 
-class PathType(Enum):
-    BLOCK = "block"
-    MLP = "MLP"
-    MLP_LAYER = "MLP_LAYER"
+
 
 class Attributor():
-    def __init__(self, model: nn.Module,  dataloader: TrainingDataLoader, nbatches: int = 32, verbose = False, pathtype = None):
+    def __init__(self, model: nn.Module,  dataloader: TrainingDataLoader, nbatches: int = 32, verbose = False):
         """
         Returns a dict of all consecutive integrated gradient attributions for a model. Most of the time, this is what you will call.
         :param model: SparsifiedGPT model
@@ -53,13 +50,15 @@ class Attributor():
         self.attributions = {}
 
         #This is a mess. Fix later
-        if pathtype == None:
-            if model.config.sae_variant.startswith('jsae') or model.config.sae_variant.startswith('mlp'):
-                self.paths = PathType.MLP
-            else:  
-                self.paths = PathType.BLOCK
-        else:
-            self.paths = pathtype
+        if model.config.sae_variant in [SAEVariant.JSAE_BLOCK, SAEVariant.STAIRCASE_BLOCK]:
+            self.paths = PathType.MLP_LAYER
+        elif model.config.sae_variant in [SAEVARIANT.JSAE]:
+            self.paths = PathType.MLP
+        else:  
+            self.paths = PathType.BLOCK
+        if verbose:
+            print(f"{self.paths=}")
+
         
         
 
@@ -73,30 +72,36 @@ class Attributor():
                     print(f"Finished Connections from Layer {i} to {i+1}")
             return self.attributions
         elif self.paths == PathType.MLP:
-            for i in range(0, 2*layers, 2):
-                self.attributions[f'{i}-{i+1}'] = self.single_layer(i, i+1)
+            for i in range(layers):
+                self.attributions[f'MLP_{i}'] = self.single_layer(i)
                 self.dataloader.reset()
                 if self.verbose:
-                    print(f"Finished Connections from Layer {i} to {i+1}")
+                    print(f"Finished Connections Across MLP in Layer {i}")
             return self.attributions
         elif self.paths == PathType.MLP_LAYER:
-            for i in range(0, 2*layers, 2):
-                self.attributions[f'{i}-{i+1}'] = self.single_layer(i, i+1)
+            for i in range(layers):
+                self.attributions[f'MLP_BLOCK_{i}'] = self.single_layer(i)
                 self.dataloader.reset()
                 if self.verbose:
-                    print(f"Finished Connections from Layer {i} to {i+1}")
+                    print(f"Finished Connections in across MLP block in Layer {i}")
             return self.attributions
 
-    def single_layer(self, layer0, layer1):
+    def single_layer(self, layer0, layer1=None):
         pass
+
     
-    def make_computation_path(self, layer0, layer1):
+    def make_computation_path(self, layer0, layer1=None):
+        """returns path, sae0, sae1 """
+        if layer1 is None:
+            layer1 = layer0+1
         if self.paths == PathType.BLOCK:
             assert layer0 < layer1
             assert layer0 >= 0
             assert layer1 <= self.model.gpt.config.n_layer
-            sae0 = self.model.saes[f'{layer0}']
-            sae1 = self.model.saes[f'{layer1}']
+            if self.verbose:
+                print(f'Indexing SAEs for computation path by {layer0}_act and {layer1}_act')
+            sae0 = self.model.saes[f'{layer0}_act']
+            sae1 = self.model.saes[f'{layer1}_act']
             
 
             #define function that goes from feature magnitudes in layer0 to feature magnitudes in layer1
@@ -112,14 +117,14 @@ class Attributor():
             #construct function from Sae0 to Sae1
             forward_list = [Sae0Decode()] + [self.model.gpt.transformer.h[i] for i in range(layer0, layer1)] + [Sae1Encode()]
             forward = t.nn.Sequential(*forward_list)
-            return forward
+            return forward, sae0, sae1
 
         elif self.paths == PathType.MLP:
-            assert layer0 + 1 ==  layer1
-            assert layer0%2 == 0
-            assert layer1 <= 2*self.model.gpt.config.n_layer
-            sae0 = self.model.saes[f'{layer0}']
-            sae1 = self.model.saes[f'{layer1}']
+
+            sae0 = self.model.saes[f'{layer0}_mlpin']
+            sae1 = self.model.saes[f'{layer0}_mlpout']
+            if self.verbose:
+                print(f'Indexing SAEs for computation path by {layer0}_mlpin and {layer0}_mlpout')
             class Sae0Decode(nn.Module):
                 def forward(self, x):
                     return sae0.decode(x)
@@ -127,19 +132,16 @@ class Attributor():
             class Sae1Encode(nn.Module):
                 def forward(self, x):
                     return sae1.encode(x)
-            block = layer0//2
-            forward_list = [Sae0Decode(), self.model.gpt.transformer.h[block].mlp, Sae1Encode()]
+
+            forward_list = [Sae0Decode(), self.model.gpt.transformer.h[layer0].mlp, Sae1Encode()]
             forward = t.nn.Sequential(*forward_list)
-            return forward
+            return forward, sae0, sae1
 
         elif self.paths == PathType.MLP_LAYER:
-            assert layer0 + 1 ==  layer1
-            assert layer0%2 == 0
-            assert layer1 <= 2*self.model.gpt.config.n_layer
-
-            block = layer0//2
-            sae0 = self.model.saes[f'{layer0}']
-            sae1 = self.model.saes[f'{layer1}']
+            if self.verbose:
+                print(f'Indexing SAEs for computation path by {layer0}_residmid and {layer0}_residpost')
+            sae0 = self.model.saes[f'{layer0}_residmid']
+            sae1 = self.model.saes[f'{layer0}_residpost']
             class Sae0Decode(nn.Module):
                 def forward(self, x):
                     return sae0.decode(x)
@@ -148,13 +150,13 @@ class Attributor():
                 def forward(self, x):
                     return sae1.encode(x)
 
-            skip_list = [self.model.gpt.transformer.h[block].ln_2 ,self.model.gpt.transformer.h[block].mlp]
+            skip_list = [self.model.gpt.transformer.h[layer0].ln_2 ,self.model.gpt.transformer.h[layer0].mlp]
             skip = t.nn.Sequential(*skip_list)
             skip_path = SkipModule(skip)
             forward_list = [Sae0Decode(), skip_path, Sae1Encode()]
             forward = t.nn.Sequential(*forward_list)
 
-            return forward
+            return forward, sae0, sae1
 
             
 
@@ -177,16 +179,14 @@ class IntegratedGradientAttributor(Attributor):
         self.abs = abs
         self.just_last = just_last
 
-        self.is_jump = (self.model.saes['0'].config.sae_variant == SAEVariant.JUMP_RELU) or (self.model.saes['0'].config.sae_variant == SAEVariant.JUMP_RELU_STAIRCASE)
+        self.is_jump = (self.model.config.sae_variant == SAEVariant.JUMP_RELU) or (self.model.config.sae_variant == SAEVariant.JUMP_RELU_STAIRCASE)
 
-    def single_layer(self, layer0, layer1):
+    def single_layer(self, layer0, layer1=None):
 
-        forward = self.make_computation_path(layer0, layer1)
+        
+        forward, sae0, sae1 = self.make_computation_path(layer0, layer1)
         for param in forward.parameters():
             param.requires_grad = False
-
-        sae0 = self.model.saes[f'{layer0}']
-        sae1 = self.model.saes[f'{layer1}']
 
         source_size, _ = sae0.W_dec.shape
         target_size, _ = sae1.W_dec.shape
@@ -199,7 +199,7 @@ class IntegratedGradientAttributor(Attributor):
 
             input, _ = self.dataloader.next_batch(self.model.gpt.config.device) #get batch of inputs 
             #output = self.model.forward(input.long(), targets=None, is_eval=True)
-            feature_magnitudes = get_SAE_activations(self.model, input.long(), [layer0, layer1])
+            feature_magnitudes = get_SAE_activations(self.model, self.paths, input.long(), [layer0])
             feature_magnitudes0 = feature_magnitudes[layer0] #feature magnitudes at source layer (batchsize, seqlen, source_size)
 
             if self.is_jump:
@@ -271,7 +271,7 @@ class IntegratedGradientAttributor(Attributor):
         integral = 0
         for alpha in path:
             point = alpha*x + (1-alpha)*base #Find point on path
-            point.requires_grad_()
+            point = point.detach().requires_grad_()
             y = fun(point)  #compute gradient of y wrt x, scale by length of a step
             
             y.backward(retain_graph=False, gradient = direction) #we only need to do a backward pass once, this saves memory

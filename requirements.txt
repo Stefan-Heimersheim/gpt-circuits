@@ -8,3 +8,6 @@ safetensors
 plotly
 bidict
 jaxtyping
+transformers
+huggingface_hub
+einops

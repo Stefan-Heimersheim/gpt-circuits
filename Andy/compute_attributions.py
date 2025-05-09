@@ -13,6 +13,7 @@ from config.sae.training import options
 from config.sae.models import sae_options, SAEVariant
 from data.dataloaders import TrainingDataLoader
 import torch
+from models.factorysparsified import FactorySparsified
 
 from models.gpt import GPT
 from models.sparsified import SparsifiedGPT, SparsifiedGPTOutput
@@ -25,11 +26,11 @@ def parse_args() -> argparse.Namespace:
     Parse command line arguments.
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, help="Model config")
+    
     parser.add_argument("--load_from", type=str, help="Model weights to load")
     parser.add_argument("--save_to", type=str, help="Path to save the attributions")
     parser.add_argument("--data_dir", type=str, help="Directory containing the data")
-    parser.add_argument("--path_type", type = str, help="BLOCK, MLP, or MLP_LAYER")
+    #parser.add_argument("--path_type", type = str, help="BLOCK, MLP, or MLP_LAYER")
 
     parser.add_argument("--attribution_method", type=str, choices=["ig", "ma"], default = 'ig', help="Attribution method to use, either 'ig' or 'ma'")
 
@@ -40,26 +41,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=10, help="Number of steps in ig path (ig only)")
     parser.add_argument("--epsilon", type=float, default=0.0, help="Epsilon value for ma (ma only)")
     parser.add_argument("--verbose", type=bool, default=True, help="Verbose output")
+    #parser.add_argument("--config", type="", help="Model config")
     
     return parser.parse_args()
 
 if __name__ == "__main__":
     # Parse command line arguments
     args = parse_args()
-    config_name = args.config
-    config = sae_options[config_name]
-
-    model = SparsifiedGPT(config)
+    
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    #print(device)
     model_path = Path(args.load_from)
-    model = model.load(model_path, device=config.device)
-    model.to(config.device)  # Move model to the appropriate device
-
+    model = FactorySparsified.load(args.load_from, device=device)
+    model.to(device)
+    
     data_dir = args.data_dir
     batch_size = args.batch_size
 
-    pathtype = args.path_type
-    if pathtype not in [PathType.BLOCK, PathType.MLP, PathType.MLP_LAYER]:
-        print(f"Unrecognized path type {pathtype}")
 
     dataloader = TrainingDataLoader(
         dir_path=data_dir,
@@ -71,7 +69,7 @@ if __name__ == "__main__":
     )
 
     if args.attribution_method == "ig":
-        attributor = IntegratedGradientAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, steps=args.steps, pathtype = pathtype)
+        attributor = IntegratedGradientAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, steps=args.steps)
         attributions = attributor.layer_by_layer()
     elif args.attribution_method == "ma":
         attributor = ManualAblationAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, epsilon=args.epsilon)
