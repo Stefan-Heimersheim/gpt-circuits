@@ -19,8 +19,8 @@ class GPTConfig(Config):
     n_head: int = 0  # number of heads
     n_embd: int = 0  # embedding dimension
     norm_strategy: NormalizationStrategy = NormalizationStrategy.LAYER_NORM
-    alpha_attn: float = 2.0 # DyT alpha attention block
-    alpha_mlp: float = 2.0
+    alpha_attn: float = 2.0 # DyT, only used during training
+    alpha_mlp: float = 2.0 # DyT, only used during training
 
     @property
     def tokenizer(self) -> Tokenizer:
@@ -41,7 +41,8 @@ class GPTConfig(Config):
         Only export integer fields (exclude name and device)
         """
         # TODO: Is dangerous, should explicitly whitelist fields
-        return {k: v for (k, v) in fields if type(v) is int}
+        white_list = ['block_size', 'vocab_size', 'n_layer', 'n_head', 'n_embd', 'norm_strategy']
+        return {k: v for (k, v) in fields if k in white_list}
 
 
 # GPT configuration options

@@ -75,6 +75,7 @@ class SparsifiedGPT(nn.Module):
         sae_class: Type[SparseAutoencoder] = self.get_sae_class(config)
         self.layer_idxs = trainable_layers if trainable_layers else list(range(len(config.n_features)))
         self.saes = nn.ModuleDict(dict([(f"{i}", sae_class(i, config, loss_coefficients, self)) for i in self.layer_idxs]))
+        self.config.sae_keys = tuple(self.saes.keys())
 
     def forward(
         self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False
@@ -307,7 +308,8 @@ class SparsifiedGPT(nn.Module):
         config.gpt_config = gpt.config
 
         # Create model using saved config
-        model = SparsifiedGPT(config, loss_coefficients, trainable_layers)
+        print(cls)
+        model = cls(config, loss_coefficients, trainable_layers)
         model.gpt = gpt
 
         # Load SAE weights

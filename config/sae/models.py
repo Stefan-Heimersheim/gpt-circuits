@@ -17,6 +17,7 @@ class SAEVariant(str, Enum):
     TOPK_STAIRCASE = "topk_staircase"
     TOPK_STAIRCASE_DETACH = "topk_staircase_detach"
     JSAE = "jsae"
+    JSAE_BLOCK = "jsae_block"
 
 @dataclass
 class SAEConfig(Config):
@@ -24,6 +25,7 @@ class SAEConfig(Config):
     n_features: tuple = ()  # Number of features in each layer
     sae_variant: SAEVariant = SAEVariant.STANDARD
     top_k: Optional[tuple[int, ...]] = None  # Required for topk variant
+    sae_keys: Optional[tuple[str, ...]] = None
 
     @property
     def block_size(self) -> int:
@@ -34,7 +36,7 @@ class SAEConfig(Config):
         """
         Only export n_features and sae_variant.
         """
-        whitelisted_fields = ("n_features", "sae_variant", "top_k")
+        whitelisted_fields = ("n_features", "sae_variant", "top_k", "sae_keys")
         return {k: v for (k, v) in fields if k in whitelisted_fields and v is not None}
 
 
