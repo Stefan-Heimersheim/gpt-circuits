@@ -12,9 +12,10 @@ from models.jsaesparsified import JSparsifiedGPT
 from models.jsaeblockparsified import JBlockSparsifiedGPT
 from models.sparsified import SparsifiedGPT
 from models.staircaseblocksparsified import StaircaseBlockSparsifiedGPT
+from models.staircasesparsified import StaircaseSparsifiedGPT
 from models.gpt import GPT
 from models.sae import SparseAutoencoder
-from config.sae.training import LossCoefficients
+from config.sae.training import LossCoefficients 
 
 import os
 import json
@@ -36,6 +37,8 @@ class FactorySparsified(SparsifiedGPT):
                 return JBlockSparsifiedGPT(config, loss_coefficients, trainable_layers)
             case SAEVariant.STAIRCASE_BLOCK:
                 return StaircaseBlockSparsifiedGPT(config, loss_coefficients, trainable_layers)
+            case SAEVariant.TOPK_STAIRCASE:
+                return StaircaseSparsifiedGPT(config, loss_coefficients, trainable_layers)
             case _:
                 return SparsifiedGPT(config, loss_coefficients, trainable_layers)
             

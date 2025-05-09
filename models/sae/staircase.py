@@ -41,7 +41,20 @@ class StaircaseBaseSAE():
                 param.data = tmp_module[name]
 
         # Load shared parameters
-        if self.is_first:
+        if hasattr(self, 'is_first') and self.is_first and hasattr(self, 'shared_context'):
+            # Try loading from layer_idx specific file first
             shared_path = dirpath / f"sae.shared.{self.shared_context.layer_idx}.safetensors"
-            print(f"Loading shared parameters from {shared_path}")
-            load_model(self.shared_context, shared_path, device=device.type)
+            if shared_path.exists():
+                print(f"Loading shared parameters from {shared_path}")
+                load_model(self.shared_context, shared_path, device=device.type)
+            elif self.shared_context.layer_idx == 0:
+                # Fallback to generic shared file for layer_idx=0
+                fallback_path = dirpath / "sae.shared.safetensors"
+                if fallback_path.exists():
+                    import warnings
+                    warnings.warn(f"DEPRICATED: Using fallback shared parameters path: {fallback_path}")
+                    load_model(self.shared_context, fallback_path, device=device.type)
+                else:
+                    raise FileNotFoundError(f"Could not find shared parameters at {shared_path} or fallback at {fallback_path}")
+            else:
+                raise FileNotFoundError(f"Could not find shared parameters at {shared_path}")

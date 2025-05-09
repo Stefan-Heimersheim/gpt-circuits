@@ -90,6 +90,7 @@ def main():
     model.to(device)
 
 
+    # not a great fix, but it will do for now
     for key, sae in model.saes.items():
         model.saes[key].shared_context.W_dec = sae.shared_context.W_dec.to(device)
         model.saes[key].shared_context.W_enc = sae.shared_context.W_enc.to(device)

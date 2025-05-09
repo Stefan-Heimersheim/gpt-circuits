@@ -18,9 +18,10 @@ from david.utils import generate_with_saes
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-gpt_mlp = FactorySparsified.load("checkpoints/staircase-mlpblock.shk_64x4", device=device)
+gpt_mlp = FactorySparsified.load("checkpoints/topk-staircase-share.shakespeare_64x4", device=device)
 #gpt_mlp = FactorySparsified.load("checkpoints/jblock.shk_64x4-sparse-2.2e-04", device=device)
 #gpt_mlp = FactorySparsified.load("checkpoints/jsae.shakespeare_64x4-sparsity-3.3e-02", device=device)
+#gpt_mlp = FactorySparsified.load("checkpoints/topk-staircase-share.shakespeare_64x4", device=device)
 
 gpt_mlp.to(device)
 
@@ -38,14 +39,14 @@ print(generate_with_saes(gpt_mlp, tokenizer, prompt, max_length=50,
                    activations_to_patch=[]))
 print("-"*100)
 
-print(f"Using only 2_mlpin and 2_mlpout")
+print(f"Using only 2_act")
 print(generate_with_saes(gpt_mlp, tokenizer, prompt, max_length=50, 
-                   activations_to_patch=["2_residmid", "2_residpost"]))
+                   activations_to_patch=["2_act"]))
 print("-"*100)
 
-print(f"Using 2_mlpin, 2_mlpout, 3_mlpin, 3_mlpout")
+print(f"Using 2_act and 3_act")
 print(generate_with_saes(gpt_mlp, tokenizer, prompt, max_length=50, 
-                   activations_to_patch=["2_residmid", "2_residpost", "3_residmid", "3_residpost"]))
+                   activations_to_patch=["2_act", "3_act"]))
 print("-"*100)
 
 print(f"Using all SAEs") 
