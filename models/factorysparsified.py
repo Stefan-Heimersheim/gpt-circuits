@@ -38,3 +38,17 @@ class FactorySparsified(SparsifiedGPT):
                 return StaircaseBlockSparsifiedGPT(config, loss_coefficients, trainable_layers)
             case _:
                 return SparsifiedGPT(config, loss_coefficients, trainable_layers)
+            
+    @classmethod
+    def load(cls, dir, loss_coefficients=None, trainable_layers=None, device: torch.device = torch.device("cpu")):
+        model = super().load(dir, loss_coefficients, trainable_layers, device)
+    
+        # Dirty hack while I find the real cause of the bug
+        if isinstance(model, StaircaseBlockSparsifiedGPT):
+            for key, sae in model.saes.items():
+                model.saes[key].shared_context.W_dec.data = sae.shared_context.W_dec.data.to(device)
+                model.saes[key].shared_context.W_enc.data = sae.shared_context.W_enc.data.to(device)
+                model.saes[key].W_dec.data = sae.W_dec.data.to(device)
+                model.saes[key].W_enc.data = sae.W_enc.data.to(device)
+
+        return model
