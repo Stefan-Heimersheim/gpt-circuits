@@ -5,6 +5,21 @@ from typing import Optional
 from config import Config, map_options
 from config.gpt.models import GPTConfig, gpt_options
 
+from typing import Literal
+
+class HookPoint(str, Enum):
+    RESID_PRE = "act"
+    RESID_MID = "residmid"
+    RESID_POST = "residpost"
+    MLP_IN = "mlpin"
+    MLP_OUT = "mlpout"
+    ACT = "act" #alias for RESID_PRE
+    ATTN_OUT = "attnout"
+    ATTN_IN = "attnin"
+    
+    @classmethod
+    def all(cls) -> list[str]:
+        return [loc.value for loc in cls]
 
 class SAEVariant(str, Enum):
     STANDARD = "standard"
@@ -39,6 +54,21 @@ class SAEConfig(Config):
         whitelisted_fields = ("n_features", "sae_variant", "top_k", "sae_keys")
         return {k: v for (k, v) in fields if k in whitelisted_fields and v is not None}
 
+def gen_sae_keys(n_features: tuple, loc : Literal["mlplayer", "mlpblock", "standard"] = 'standard') -> tuple[str, ...]:
+    match loc:
+        case "mlplayer":
+            return tuple(f"{x}_{y}" for x in range(n_features) for y in [HookPoint.MLP_IN, HookPoint.MLP_OUT])
+        case "mlpblock":
+            return tuple(f"{x}_{y}" for x in range(n_features) for y in [HookPoint.RESID_MID, HookPoint.RESID_POST])
+        case _:
+            # assume we're using the activations between the transformer blocks
+            # for a 4 layer transformer, this will be:
+            # 0_act = 0_residpre (i.e. between the embedding layer and the first transformer block)
+            # 1_act = 1_residpre (i.e. between the first and second transformer blocks)
+            # 2_act = 2_residpre (i.e. between the second and third transformer blocks)
+            # 3_act = 3_residpre (i.e. between the third and fourth transformer blocks)
+            # 4_act = 3_residpost (i.e. between the fourth/last transformer block and the final layer norm)
+            return tuple(f"{x}_{HookPoint.ACT}" for x in range(n_features))
 
 # SAE configuration options
 sae_options: dict[str, SAEConfig] = map_options(
@@ -47,6 +77,7 @@ sae_options: dict[str, SAEConfig] = map_options(
         gpt_config=gpt_options["ascii_64x4"],
         n_features=tuple(64 * n for n in (8, 8, 8, 8, 8, 8, 8, 8)),
         sae_variant=SAEVariant.STANDARD,
+        sae_keys=gen_sae_keys(n_features=8, loc="mlplayer"),
     ),
     SAEConfig(
         name="mlp.topkx8.shakespeare_64x4",
@@ -54,6 +85,7 @@ sae_options: dict[str, SAEConfig] = map_options(
         n_features=tuple(64 * n for n in (8, 8, 8, 8, 8, 8, 8, 8)),
         sae_variant=SAEVariant.TOPK,
         top_k=(10, 10, 10, 10, 10, 10, 10, 10),
+        sae_keys=gen_sae_keys(n_features=8, loc="mlplayer"),
     ),
     SAEConfig(
         name="jsae.topkx8.shakespeare_64x4",
@@ -61,12 +93,14 @@ sae_options: dict[str, SAEConfig] = map_options(
         n_features=tuple(64 * n for n in (8, 8, 8, 8, 8, 8, 8, 8)),
         sae_variant=SAEVariant.JSAE,
         top_k=(10, 10, 10, 10, 10, 10, 10, 10),
+        sae_keys=gen_sae_keys(n_features=8, loc="mlplayer"),
     ),
     SAEConfig(
         name="standardx16.tiny_32x4",
         gpt_config=gpt_options["tiktoken_32x4"],
         n_features=tuple(32 * n for n in (16, 16, 16, 16, 16)),
         sae_variant=SAEVariant.STANDARD,
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     # No such thing as tiny_64x2?
     # SAEConfig(
@@ -80,6 +114,7 @@ sae_options: dict[str, SAEConfig] = map_options(
         gpt_config=gpt_options["ascii_64x4"],
         n_features=tuple(64 * n for n in (8, 8, 8, 8, 8)),
         sae_variant=SAEVariant.STANDARD,
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     SAEConfig(
         name="topk-10-x8.shakespeare_64x4",
@@ -87,6 +122,7 @@ sae_options: dict[str, SAEConfig] = map_options(
         n_features=tuple(64 * n for n in (8, 8, 8, 8, 8)),
         sae_variant=SAEVariant.TOPK,
         top_k=(10, 10, 10, 10, 10),
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     SAEConfig(
         name="topk-staircase-10-x8-noshare.shakespeare_64x4",
@@ -94,6 +130,7 @@ sae_options: dict[str, SAEConfig] = map_options(
         n_features=tuple(64 * n for n in (8, 16, 24, 32, 40)),
         sae_variant=SAEVariant.TOPK,
         top_k=(10, 10, 10, 10, 10),
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     SAEConfig(
         name="topk-staircase-10-x8-share.shakespeare_64x4",
@@ -101,6 +138,7 @@ sae_options: dict[str, SAEConfig] = map_options(
         n_features=tuple(64 * n for n in (8, 16, 24, 32, 40)),
         sae_variant=SAEVariant.TOPK_STAIRCASE,
         top_k=(10, 10, 10, 10, 10),
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     SAEConfig(
         name="topk-staircase-10-x8-detach.shakespeare_64x4",
@@ -108,18 +146,21 @@ sae_options: dict[str, SAEConfig] = map_options(
         n_features=tuple(64 * n for n in (8, 16, 24, 32, 40)),
         sae_variant=SAEVariant.TOPK_STAIRCASE_DETACH,
         top_k=(10, 10, 10, 10, 10),
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     SAEConfig(
         name="standardx40.shakespeare_64x4",
         gpt_config=gpt_options["ascii_64x4"],
         n_features=tuple(64 * n for n in (40, 40, 40, 40, 40)),
         sae_variant=SAEVariant.STANDARD,
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     SAEConfig(
         name="staircasex8.shakespeare_64x4",
         gpt_config=gpt_options["ascii_64x4"],
         n_features=tuple(64 * n for n in (8, 16, 24, 32, 40)),
         sae_variant=SAEVariant.STANDARD,
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     SAEConfig(
         name="topk-x8.shakespeare_64x4",
@@ -127,6 +168,7 @@ sae_options: dict[str, SAEConfig] = map_options(
         n_features=tuple(64 * n for n in (8, 8, 8, 8, 8)),
         sae_variant=SAEVariant.TOPK,
         top_k=(10,10,10,10,10),
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     SAEConfig(
         name="top5.shakespeare_64x4",
@@ -134,6 +176,7 @@ sae_options: dict[str, SAEConfig] = map_options(
         n_features=tuple(64 * n for n in (8, 8, 8, 8, 8)),
         sae_variant=SAEVariant.TOPK,
         top_k=(5,5,5,5,5),
+        sae_keys=gen_sae_keys(n_features=5),
     ),
      SAEConfig(
         name="top20.shakespeare_64x4",
@@ -141,6 +184,7 @@ sae_options: dict[str, SAEConfig] = map_options(
         n_features=tuple(64 * n for n in (8, 8, 8, 8, 8)),
         sae_variant=SAEVariant.TOPK,
         top_k=(20,20,20,20,20),
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     SAEConfig(
         name="topk-x40.shakespeare_64x4",
@@ -148,18 +192,21 @@ sae_options: dict[str, SAEConfig] = map_options(
         n_features=tuple(64 * n for n in (40, 40, 40, 40, 40)),
         sae_variant=SAEVariant.TOPK,
         top_k=(10,10,10,10,10),
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     SAEConfig(
         name="jumprelu-x8.shakespeare_64x4",
         gpt_config=gpt_options["ascii_64x4"],
         n_features=tuple(64 * n for n in (8, 8, 8, 8, 8)),
         sae_variant=SAEVariant.JUMP_RELU,
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     SAEConfig(
         name="jumprelu-staircase-x8.shakespeare_64x4",
         gpt_config=gpt_options["ascii_64x4"],
         n_features=tuple(64 * n for n in (8, 16, 24, 32, 40)),
         sae_variant=SAEVariant.JUMP_RELU_STAIRCASE,
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     SAEConfig(
         name="jumprelu-x16.shakespeare_64x4",
@@ -167,11 +214,13 @@ sae_options: dict[str, SAEConfig] = map_options(
         # Only the penultimate layer needs the full x16 expansion factor
         n_features=tuple(64 * n for n in (4, 4, 4, 16, 4)),
         sae_variant=SAEVariant.JUMP_RELU,
+        sae_keys=gen_sae_keys(n_features=5),
     ),
     SAEConfig(
         name="jumprelu-x32.stories_256x4",
         gpt_config=gpt_options["tiktoken_256x4"],
         n_features=tuple(256 * n for n in (32, 32, 32, 32, 32)),
         sae_variant=SAEVariant.JUMP_RELU,
+        sae_keys=gen_sae_keys(n_features=5),
     ),
 )
