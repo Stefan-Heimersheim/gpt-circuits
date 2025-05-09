@@ -52,7 +52,7 @@ class Attributor():
         #This is a mess. Fix later
         if model.config.sae_variant in [SAEVariant.JSAE_BLOCK, SAEVariant.STAIRCASE_BLOCK]:
             self.paths = PathType.MLP_LAYER
-        elif model.config.sae_variant in [SAEVARIANT.JSAE]:
+        elif model.config.sae_variant in [SAEVariant.JSAE]:
             self.paths = PathType.MLP
         else:  
             self.paths = PathType.BLOCK
@@ -65,7 +65,7 @@ class Attributor():
     def layer_by_layer(self)->dict:
         layers = self.model.gpt.config.n_layer
         if self.paths == PathType.BLOCK:
-            for i in range(layers):
+            for i in range(layers): #In case of SAE 4 error change to       for i in range(layers-1):
                 self.attributions[f'{i}-{i+1}'] = self.single_layer(i, i+1)
                 self.dataloader.reset()
                 if self.verbose:
