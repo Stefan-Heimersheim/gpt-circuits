@@ -255,6 +255,31 @@ class GPT(nn.Module):
     def forward_with_patched_activations(self, resid: torch.Tensor, layer_idx: int) -> torch.Tensor:
         return self.forward(resid, start_at_layer=layer_idx).logits
 
+    def forward_with_patched_activations_mlp(self, 
+                                         x: Float[Tensor, "B T n_embd"], 
+                                         resid_mid: Float[Tensor, "B T n_embd"],
+                                         layer_idx: int,
+                                         hook_loc: Literal['mlpin', 'mlpout']) -> torch.Tensor:
+        """
+        Forward pass of the model with patched activations.
+        0 : h[0].mlp_in
+        1 : h[0].mlp_out
+        2 : h[1].mlp_in
+        3 : h[1].mlp_out
+        ...
+        :param resid_mid: Residual stream activations at the middle of the transformer block. Shape: (B, T, n_embd)
+        :param patched_activations: Input activations. Shape: (B, T, n_embd)
+        :param layer_idx: Layer index. 0 patches activations just before the first transformer block.
+        :param mlp_idx: MLP index. 0 patches activations just before the first transformer block.
+        """
+        assert isinstance(x, torch.Tensor), f"x: {x}"
+        if hook_loc == 'mlpin':
+            x = self.transformer.h[layer_idx].mlp(x)
+        
+        resid_post = x + resid_mid
+        # forward through transformer blocks starting with the specified layer
+        return self.forward(resid_post, start_at_layer=layer_idx+1).logits
+
     @classmethod
     def load(cls, dir, device: torch.device):
         meta_path = os.path.join(dir, "model.json")

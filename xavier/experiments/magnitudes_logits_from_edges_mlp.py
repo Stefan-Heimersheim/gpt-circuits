@@ -20,6 +20,7 @@ from config.sae.models import SAEConfig, SAEVariant
 from config.sae.training import LossCoefficients
 from models.sae.topk import StaircaseTopKSAE
 from models.gpt import GPT
+from models.factorysparsified import FactorySparsified
 from models.mlpsparsified import MLPSparsifiedGPT
 from data.tokenizers import ASCIITokenizer
 from david.convert_to_tl import convert_gpt_to_transformer_lens
@@ -89,23 +90,8 @@ def main():
 
     # Load GPT model
     print("Loading GPT model...")
-    gpt = GPT.load(gpt_dir, device=device)
 
-    # Not necessary?
-    # sae_config =SAEConfig(
-    #         gpt_config=gpt.config,
-    #         n_features=tuple(64 * n for n in (8,8,8,8,8,8,8,8)),
-    #         sae_variant=SAEVariant.TOPK,
-    #         top_k = (10, 10, 10, 10, 10, 10, 10, 10)
-    #     )
-
-    # Load GPT MLP
-    print("Loading sparsified MLP model...")
-    loss_coefficients = LossCoefficients()
-    model = MLPSparsifiedGPT.load(mlp_dir, 
-                                    loss_coefficients,
-                                    trainable_layers = None,
-                                    device = device)
+    model = FactorySparsified.load(mlp_dir, device=device)
     model.to(device)
 
     # Load SAE config
@@ -113,7 +99,8 @@ def main():
     with open(meta_path, "r") as f:
         meta = json.load(f)
     config = SAEConfig(**meta)
-    config.gpt_config = gpt.config
+    
+    # config.gpt_config = gpt.config
 
     # Create a model profile (will only work for zero ablation)
     model_profile = ModelProfile()
@@ -237,16 +224,22 @@ def main():
 
     # Compute logits subcircuit
     x_reconstructed = model.saes[f'{upstream_layer_num}_mlpout'].decode(downstream_magnitudes) 
-    predicted_logits = model.gpt.forward_with_patched_activations(
+    predicted_logits = model.gpt.forward_with_patched_activations_mlp(
         x_reconstructed, resid_mid, layer_idx, hook_loc
     )   # Shape: (num_batches, T, V)
+    # predicted_logits = model.gpt.forward_with_patched_activations(
+    #     x_reconstructed, layer_idx
+    # )   # Shape: (num_batches, T, V)
     print(predicted_logits.shape)
 
     # Compute logits full circuit
     x_reconstructed_full_circuit = model.saes[f'{upstream_layer_num}_mlpout'].decode(downstream_magnitudes_full_circuit) 
-    predicted_logits_full_circuit = model.gpt.forward_with_patched_activations(
+    predicted_logits_full_circuit = model.gpt.forward_with_patched_activations_mlp(
         x_reconstructed_full_circuit, resid_mid, layer_idx, hook_loc
     )  # Shape: (num_batches, T, V)
+    # predicted_logits_full_circuit = model.gpt.forward_with_patched_activations(
+    #     x_reconstructed_full_circuit, layer_idx
+    # )  # Shape: (num_batches, T, V)
     print(predicted_logits_full_circuit.shape)
 
     # Compute logits full model
