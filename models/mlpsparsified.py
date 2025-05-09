@@ -40,6 +40,7 @@ class MLPSparsifiedGPT(SparsifiedGPT):
         
         self.saes = nn.ModuleDict(dict([(key, sae_class(idx, config, loss_coefficients, self)) 
                                         for idx, key in enumerate(sae_keys)]))
+        self.sae_keys = sae_keys
        
     def forward(
         self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False

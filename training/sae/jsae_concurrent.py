@@ -22,7 +22,7 @@ from training.sae.concurrent import ConcurrentTrainer
 import dataclasses
 import json
 from config.sae.models import SAEConfig
-
+import warnings
 from typing import Optional, List, Union
 # Change current working directory to parent
 # while not os.getcwd().endswith("gpt-circuits"):
@@ -41,7 +41,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--name", type=str, help="Model name for checkpoints", default="jsae.shk_64x4")
     parser.add_argument("--sparsity", type=str, help="Jacobian sparsity loss coefficient(s). Either a single float or comma-separated floats for each layer.", default="0.02")
     parser.add_argument("--max_steps", type=int, help="Maximum number of steps to train", default=7500)
+    parser.add_argument("--k", type=int, help="Top-k for top-k SAEs", default=10)
     return parser.parse_args()
+
 
 
 class JSaeTrainer(ConcurrentTrainer):
@@ -90,7 +92,8 @@ class JSaeTrainer(ConcurrentTrainer):
             # save this pair of saes!
                 for loc in locs:
                     sae = self.model.saes[f'{layer_idx}_{loc}']
-                    assert "jsae" in sae.config.sae_variant
+                    if "jsae" not in sae.config.sae_variant:
+                        warnings.warn(f"JSaeTrainer: Saving non-JSAE SAE for layer {layer_idx} {loc}")
                     sae.save(Path(dir))
 
     def calculate_loss(self, x, y, is_eval) -> tuple[torch.Tensor, Optional[dict[str, torch.Tensor]]]:
@@ -121,26 +124,30 @@ class JSaeTrainer(ConcurrentTrainer):
         
         
         for layer_idx in self.model.layer_idxs:
-            if self.model.loss_coefficients.sparsity[layer_idx] == 0 and not is_eval: # compute jacobian loss only on eval if sparsity is 0
-                continue
-            topk_indices_mlpin = output.indices[f'{layer_idx}_mlpin']
-            topk_indices_mlpout = output.indices[f'{layer_idx}_mlpout']
+            key = self.model.sae_keys[layer_idx]
+            if "jsae" in self.model.saes[key].config.sae_variant:
+                if self.model.loss_coefficients.sparsity[layer_idx] == 0 and not is_eval: # compute jacobian loss only on eval if sparsity is 0
+                    continue
+                topk_indices_mlpin = output.indices[f'{layer_idx}_mlpin']
+                topk_indices_mlpout = output.indices[f'{layer_idx}_mlpout']
 
-            mlp_act_grads = output.activations[f"{layer_idx}_mlpactgrads"]
+                mlp_act_grads = output.activations[f"{layer_idx}_mlpactgrads"]
 
-            jacobian_loss = jacobian_mlp(
-                sae_mlpin = self.model.saes[f'{layer_idx}_mlpin'],
-                sae_mlpout = self.model.saes[f'{layer_idx}_mlpout'],
-                mlp = self.model.gpt.transformer.h[layer_idx].mlp,
-                topk_indices_mlpin = topk_indices_mlpin,
-                topk_indices_mlpout = topk_indices_mlpout,
-                mlp_act_grads = mlp_act_grads,
-            )
+                jacobian_loss = jacobian_mlp(
+                    sae_mlpin = self.model.saes[f'{layer_idx}_mlpin'],
+                    sae_mlpout = self.model.saes[f'{layer_idx}_mlpout'],
+                    mlp = self.model.gpt.transformer.h[layer_idx].mlp,
+                    topk_indices_mlpin = topk_indices_mlpin,
+                    topk_indices_mlpout = topk_indices_mlpout,
+                    mlp_act_grads = mlp_act_grads,
+                )
 
-            # Each SAE has it's own loss term, and are trained "independently"
-            # so we will put the jacobian loss into the aux loss term
-            # for the sae_mlpout for each pair of SAEs
-            jacobian_losses[layer_idx] = jacobian_loss
+                # Each SAE has it's own loss term, and are trained "independently"
+                # so we will put the jacobian loss into the aux loss term
+                # for the sae_mlpout for each pair of SAEs
+                jacobian_losses[layer_idx] = jacobian_loss
+            else:
+                warnings.warn(f"JSaeTrainer: Skipping non-JSAE SAE for layer {layer_idx}")
 
         # Store computed loss components in sparsify output to be read out by gather_metrics
         output.sparsity_losses = jacobian_losses.detach()
@@ -168,10 +175,10 @@ if __name__ == "__main__":
     config_name = args.config
     config = options[config_name]
 
-    if args.name:
-        config.name = args.name
     if args.max_steps:
         config.max_steps = args.max_steps
+    if args.k:
+        config.sae_config.top_k = (args.k,) * len(config.sae_config.top_k)
 
     if args.sparsity is not None:
         try:
@@ -181,7 +188,7 @@ if __name__ == "__main__":
             print(f"Error: Invalid format for --sparsity. Expected a single float or comma-separated floats. Got: {args.sparsity}")
             sys.exit(1)
 
-        num_trainable_layers = len(config.loss_coefficients.sparsity) # Use initial config to know layer count
+        num_trainable_layers = len(config.sae_config.top_k)//2 # Use initial config to know layer count
 
         if len(sparsity_values) == 1:
             # Single value provided, apply to all layers
@@ -199,6 +206,9 @@ if __name__ == "__main__":
         else:
             # Incorrect number of values
             raise ValueError(f"Error: --sparsity must provide either 1 value (for all layers) or {num_trainable_layers} values (one per layer). Got {len(sparsity_values)} values.")
+
+    if args.name:
+        config.name = args.name
 
     # Initialize trainer
     trainer = JSaeTrainer(config, load_from=TrainingConfig.checkpoints_dir / args.load_from)

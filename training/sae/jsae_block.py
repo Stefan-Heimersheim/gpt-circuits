@@ -27,7 +27,7 @@ import dataclasses
 import json
 from config.sae.models import SAEConfig
 from training import Trainer
-
+import warnings
 from typing import Optional, List, Union
 # Change current working directory to parent
 # while not os.getcwd().endswith("gpt-circuits"):
@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--name", type=str, help="Model name for checkpoints", default="jblock.shk_64x4")
     parser.add_argument("--sparsity", type=str, help="Jacobian sparsity loss coefficient(s). Either a single float or comma-separated floats for each layer.", default="0.02")
     parser.add_argument("--max_steps", type=int, help="Maximum number of steps to train", default=20000)
+    parser.add_argument("--k", type=int, help="Top-k for top-k SAEs", default=10)
     return parser.parse_args()
 
 
@@ -59,8 +60,7 @@ class JSaeBlockTrainer(JSaeTrainer, Trainer):
         Load and freeze GPT weights before training SAE weights.
         """
         # Create model
-        config.sae_config.gpt_config.normalization = NormalizationStrategy.DYNAMIC_TANH
-        print(config.sae_config.gpt_config.normalization)
+        print(config.sae_config.gpt_config.norm_strategy)
         model = JBlockSparsifiedGPT(config.sae_config, 
                                   config.loss_coefficients, 
                                   config.trainable_layers)
@@ -76,7 +76,8 @@ class JSaeBlockTrainer(JSaeTrainer, Trainer):
             param.requires_grad = False
         
         for block in model.gpt.transformer.h:
-            assert isinstance(block.ln_2, DynamicTanh), "Only DynamicTanh is supported for JSAE Block"
+            if not isinstance(block.ln_2, DynamicTanh):
+                warnings.warn(f"JSaeBlockTrainer: Expecting DynamicTanh after ln_2, but got {type(block.ln_2)}")
 
         SAETrainer.__init__(self, model, config)
 
@@ -124,54 +125,12 @@ class JSaeBlockTrainer(JSaeTrainer, Trainer):
             print(f"Final CE loss increases: {self.pretty_print(self.checkpoint_ce_loss_increases)}")
             print(f"Final compound CE loss increase: {self.pretty_print(self.checkpoint_compound_ce_loss_increase)}")
         
-        
-            
     def save_checkpoint(self, model: JBlockSparsifiedGPT, is_best: torch.Tensor):
         """
         Save SAE weights for layers that have achieved a better validation loss.
         """
         # As weights are shared, only save if each layer is better than the previous best.
         return super().save_checkpoint(model, is_best, locs = ('residmid', 'residpost'))
-        
-
-    # TODO: This is a very expensive operation, we should try to speed it up
-    def output_to_loss(self, output: SparsifiedGPTOutput, is_eval: bool= False) -> torch.Tensor:
-        """
-        Return an array of losses, one for each pair of layers:
-        loss[i] = loss_recon[f"{i}_residmid"] + loss_recon[f"{i}_residpost"] 
-            + l1_jacobian(f"feat_mag_{i}_residpost", f"feat_mag_{i}_residmid")
-        """
-        device = output.sae_losses.device
-        recon_losses = output.sae_losses
-        jacobian_losses = torch.zeros(len(self.model.layer_idxs), device=device)
-        j_coeffs = torch.tensor(self.model.loss_coefficients.sparsity, device=device)
-        
-        
-        for layer_idx in self.model.layer_idxs:
-            if self.model.loss_coefficients.sparsity[layer_idx] == 0 and not is_eval: # compute jacobian loss only on eval if sparsity is 0
-                continue
-
-            jacobian_loss = jacobian_mlp_block_fast_noeindex(
-                sae_residmid = self.model.saes[f'{layer_idx}_residmid'],
-                sae_residpost = self.model.saes[f'{layer_idx}_residpost'],
-                mlp = self.model.gpt.transformer.h[layer_idx].mlp,
-                topk_indices_residmid = output.indices[f'{layer_idx}_residmid'],
-                topk_indices_residpost = output.indices[f'{layer_idx}_residpost'],
-                mlp_act_grads = output.activations[f"{layer_idx}_mlpactgrads"],
-                norm_act_grads = output.activations[f"{layer_idx}_normactgrads"]
-            )
-
-            # Each SAE has it's own loss term, and are trained "independently"
-            # so we will put the jacobian loss into the aux loss term
-            # for the sae_mlpout for each pair of SAEs
-            jacobian_losses[layer_idx] = jacobian_loss
-
-        # Store computed loss components in sparsify output to be read out by gather_metrics
-        output.sparsity_losses = jacobian_losses.detach()
-
-        pair_losses = einops.rearrange(recon_losses, "(layer pair) -> layer pair", pair=2).sum(dim=-1)
-        losses = pair_losses + j_coeffs * jacobian_losses # (layer)
-        return losses
 
 if __name__ == "__main__":
     # Parse command line arguments
@@ -181,8 +140,6 @@ if __name__ == "__main__":
     config_name = args.config
     config = options[config_name]
 
-    if args.name:
-        config.name = args.name
     if args.max_steps:
         config.max_steps = args.max_steps
 
@@ -194,7 +151,7 @@ if __name__ == "__main__":
             print(f"Error: Invalid format for --sparsity. Expected a single float or comma-separated floats. Got: {args.sparsity}")
             sys.exit(1)
 
-        num_trainable_layers = len(config.loss_coefficients.sparsity) # Use initial config to know layer count
+        num_trainable_layers = len(config.sae_config.top_k)//2 # Use initial config to know layer count
 
         if len(sparsity_values) == 1:
             # Single value provided, apply to all layers
@@ -212,6 +169,13 @@ if __name__ == "__main__":
         else:
             # Incorrect number of values
             raise ValueError(f"Error: --sparsity must provide either 1 value (for all layers) or {num_trainable_layers} values (one per layer). Got {len(sparsity_values)} values.")
+
+    if args.k:
+        config.k = args.k
+        config.name = f"{config.name}-k-{args.k}"
+        
+    if args.name:
+        config.name = args.name
 
     # Initialize trainer
     trainer = JSaeBlockTrainer(config, load_from=TrainingConfig.checkpoints_dir / args.load_from)

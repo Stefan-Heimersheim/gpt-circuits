@@ -31,6 +31,8 @@ from jaxtyping import Float
 from torch import Tensor
 from typing import Literal
 
+import warnings
+
 class JBlockSparsifiedGPT(SparsifiedGPT):
     def __init__(
         self, 
@@ -40,7 +42,8 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
     ):
         # TODO: more elegant way to just allow for arbitrary hook points to attach SAEs to,
         # rather than a jillion different SparsifiedGPT subclasses.
-        assert config.sae_variant == SAEVariant.JSAE_BLOCK, f"You must use JSAE_BLOCK variant. See JSparsifiedGPT/SparsifiedGPT for other variants."
+        if config.sae_variant != SAEVariant.JSAE_BLOCK: 
+            warnings.warn(f"JBlockSparsifiedGPT: You must use JSAE_BLOCK variant. See JSparsifiedGPT/SparsifiedGPT for other variants.")
         
         nn.Module.__init__(self) 
         self.config = config
@@ -55,6 +58,8 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
         
         self.saes = nn.ModuleDict(dict([(key, sae_class(idx, config, loss_coefficients, self)) 
                                         for idx, key in enumerate(sae_keys)]))
+        
+        self.sae_keys = sae_keys
         
     
     def forward(
