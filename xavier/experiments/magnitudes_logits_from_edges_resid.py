@@ -1,37 +1,46 @@
-#!/usr/bin/env python3
-# filepath: xavier/experiments/compute_downstream_magnitudes.py
-
-import torch
-import sys
 import os
-from pathlib import Path
+import sys  # Add this import
+import torch
+import random
 import time
 import datetime
-import random
+from pathlib import Path
 import numpy as np
 import json
 import argparse
-from safetensors.torch import load_model, load_file, save_file
+from transformer_lens.hook_points import HookPoint
 import torch.nn.functional as F
+from safetensors.torch import load_model, load_file, save_file
 
 # Path setup
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
-# Imports from the project
-from config.sae.models import SAEConfig
-from models.sparsified import SparsifiedGPT
+from config.sae.models import SAEConfig, SAEVariant
+from config.sae.training import LossCoefficients
+from models.sae.topk import StaircaseTopKSAE
 from models.gpt import GPT
-from circuits import Circuit, Edge, Node, TokenlessNode, TokenlessEdge
+from models.factorysparsified import FactorySparsified
+from models.mlpsparsified import MLPSparsifiedGPT
+from data.tokenizers import ASCIITokenizer
+from david.convert_to_tl import convert_gpt_to_transformer_lens
+from david.convert_to_tl import run_tests as run_tl_tests
+from xavier.utils import create_tokenless_edges_from_array, get_attribution_rankings
+
+from circuits import Circuit
+from circuits.search.divergence import (
+    compute_downstream_magnitudes_mlp,
+    patch_feature_magnitudes,
+)
 from circuits.features.cache import ModelCache
 from circuits.features.profiles import ModelProfile
 from circuits.search.ablation import ResampleAblator
-from circuits.search.edges import compute_batched_downstream_magnitudes_from_edges
+from circuits.search.edges import compute_batched_downstream_magnitudes_from_edges_mlp, compute_batched_downstream_magnitudes_from_edges_resid
 from xavier.experiments import ExperimentParams, ExperimentResults, ExperimentOutput
-from xavier.utils import create_tokenless_edges_from_array, get_attribution_rankings
 
-
+@torch.no_grad()
 def main():
+
     # Parse arguments
     parser = argparse.ArgumentParser(description="Compute downstream magnitudes & logits from edges")
     parser.add_argument("--num-edges", type=int, default=100, help="Number of edges to use")
@@ -40,8 +49,9 @@ def main():
     parser.add_argument("--num-prompts", type=int, default=1, help="Number of prompts to use from validation data")
     parser.add_argument("--edge-selection", type=str, default="random", 
                         choices=["random", "gradient", "gradient_reversed", "manual_scaled", "manual_pos_scaled", "manual_unscaled"], help="Edge selection strategy")
-    parser.add_argument("--sae-variant", type=str, default="standard", 
-                        choices=["standard", "topk", "topk-x40", "topk-staircase", "jumprelu", "regularized", "top5", "top20", "topk"], help="Type of SAE")
+    parser.add_argument("--sae-variant", type=str, default="standard", help="Type of SAE")
+    #parser.add_argument("--sae-variant", type=str, default="standard", 
+                        #choices=["standard", "topk", "topk-x40", "topk-staircase", "jumprelu", "regularized", "top5", "top20", "topk", "mlp-topk", "jsae", "1e0", "1e-1", "1e-2", "1e-3", "2e-1", "2e-2", "5e-1", "5e-2", "5e-3"], help="Type of SAE")
     parser.add_argument("--run-index", type=str, default="testing", help="Index of the run")
     parser.add_argument("--seed", type=int, default=125, help="Random seed")
     args = parser.parse_args()
@@ -58,47 +68,40 @@ def main():
     run_idx = args.run_index
     seed = args.seed
 
-    if edge_selection == "outer":
-        assert upstream_layer_num==3, "Only layer 3 is supported for outer product"
-        assert num_prompts==1, "Only 1 prompt is supported for outer product"
-
     # Set random seed
     random.seed(seed)
-    
+
     # Device setup
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print(f"Using device: {device}")
-    
+
     # Setup model paths
     checkpoint_dir = project_root / "checkpoints"
     gpt_dir = checkpoint_dir / "shakespeare_64x4"
-    sae_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
-    # sae_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
     data_dir = project_root / "data"
-    
+
+    # Hacky fix for loading the model
+    if sae_variant == "mlp-topk":
+        mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
+    elif sae_variant == "jsae":
+        mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
+    else:
+        mlp_dir = checkpoint_dir / f"jblock.shk_64x4-sparse-{sae_variant}"
+
     # Load GPT model
     print("Loading GPT model...")
-    gpt = GPT.load(gpt_dir, device=device)
-    
+
+    model = FactorySparsified.load(mlp_dir, device=device)
+    model.to(device)
+
     # Load SAE config
-    print("Loading SAE configuration...")
-    sae_config_dir = sae_dir / "sae.json"
-    with open(sae_config_dir, "r") as f:
+    meta_path = os.path.join(mlp_dir, "sae.json")
+    with open(meta_path, "r") as f:
         meta = json.load(f)
     config = SAEConfig(**meta)
-    config.gpt_config = gpt.config
     
-    # Create SparsifiedGPT model
-    print("Creating SparsifiedGPT model...")
-    model = SparsifiedGPT(config)
-    model.gpt = gpt
-    
-    # Load SAE weights
-    print("Loading SAE weights...")
-    for layer_name, module in model.saes.items():
-        weights_path = os.path.join(sae_dir, f"sae.{layer_name}.safetensors")
-        load_model(module, weights_path, device=device.type)
-    
+    # config.gpt_config = gpt.config
+
     # Create a model profile (will only work for zero ablation)
     model_profile = ModelProfile()
 
@@ -126,15 +129,16 @@ def main():
     usable_data = val_tensor[:num_chunks * sequence_length]
     reshaped_val_tensor = usable_data.reshape(num_chunks, sequence_length)
     input_ids = reshaped_val_tensor[:num_prompts, :].to(device)  # Also move to the correct device
-    
+
     print(f"Computing upstream & downstream magnitudes (full circuit)...")
-    with torch.no_grad():    
-        with model.use_saes(activations_to_patch=[upstream_layer_num, upstream_layer_num + 1]) as encoder_outputs:
-            _ = model(input_ids)
-            upstream_magnitudes = encoder_outputs[f'{upstream_layer_num}'].feature_magnitudes
-            downstream_magnitudes_full_circuit = encoder_outputs[f'{upstream_layer_num + 1}'].feature_magnitudes
-    
+    keys = [f'{upstream_layer_num}_residmid', f'{upstream_layer_num}_residpost']
+    with model.use_saes(activations_to_patch = keys) as encoder_outputs:
+        _ = model(input_ids)
+        upstream_magnitudes = encoder_outputs[keys[0]].feature_magnitudes
+        downstream_magnitudes_full_circuit = encoder_outputs[keys[1]].feature_magnitudes
+
     # Create edges
+    # STILL CORRECT?
     num_upstream_features = model.config.n_features[upstream_layer_num]
     num_downstream_features = model.config.n_features[upstream_layer_num + 1]
     
@@ -148,37 +152,11 @@ def main():
         edge_arr = all_edges[:num_edges]
 
     elif edge_selection == "gradient":
-        gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_igattributions.safetensors"
+        gradient_dir = project_root / f"attributions/jsae.shakespeare_64x4-sparsity-{sae_variant}-20k.safetensors"
         tensors = load_file(gradient_dir)
-        all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
+        all_edges, _ = get_attribution_rankings(tensors[f'{2*upstream_layer_num}-{2*upstream_layer_num + 1}'])
         edge_arr = all_edges[:num_edges]
 
-    elif edge_selection == "gradient_reversed":
-        gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_igattributions.safetensors"
-        tensors = load_file(gradient_dir)
-        all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
-        edge_arr = all_edges[:num_edges]
-        all_edges_reversed = all_edges[::-1]
-        edge_arr = all_edges_reversed[:num_edges]
-
-    elif edge_selection == "manual_scaled":
-        gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_manual_ablation_scaled.safetensors"
-        tensors = load_file(gradient_dir)
-        all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
-        edge_arr = all_edges[:num_edges]
-
-    elif edge_selection == "manual_pos_scaled":
-        gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_manual_ablation_pos_scaled.safetensors"
-        tensors = load_file(gradient_dir)
-        all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
-        edge_arr = all_edges[:num_edges]
-
-    elif edge_selection == "manual_unscaled":
-        gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_manual_ablation_unscaled.safetensors"
-        tensors = load_file(gradient_dir)
-        all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
-        edge_arr = all_edges[:num_edges]
-    
     # Create TokenlessEdge objects
     edges = create_tokenless_edges_from_array(edge_arr, upstream_layer_num)
     
@@ -186,12 +164,46 @@ def main():
     print(f"Computing downstream magnitudes from {len(edges)} edges...")
     start_time = time.time()
     
+    print(upstream_magnitudes.shape)
+    print(downstream_magnitudes_full_circuit.shape)
     if num_edges == num_upstream_features * num_downstream_features:
         # Use the full circuit magnitudes
         print(f"Using full circuit magnitudes...")
         downstream_magnitudes = downstream_magnitudes_full_circuit
+
+    # elif num_edges == 0:
+    #     # Create a dummy circuit for the ablator
+    #     empty_circuit = Circuit(nodes=frozenset()) # Dummy circuit not used for downstream computation
+        
+    #     downstream_magnitudes_list = []
+    #     for i in range(num_prompts):
+    #         dummy_downstream = compute_downstream_magnitudes_mlp(  # Shape: (num_samples, T, F)
+    #             model,
+    #             upstream_layer_num,
+    #             {empty_circuit: upstream_magnitudes[i].unsqueeze(0)}
+    #         )
+    #         dummy_downstream_magnitudes = dummy_downstream[empty_circuit].squeeze(0)
+    #         print(dummy_downstream_magnitudes.shape)
+
+    #         # Initialise the result tensor as the patched downstream magnitudes
+    #         patched_downstream_magnitudes = patch_feature_magnitudes(  # Shape: (num_samples, T, F)
+    #             ablator,
+    #             upstream_layer_num + 1,
+    #             target_token_idx,
+    #             [empty_circuit],
+    #             dummy_downstream_magnitudes,
+    #             num_samples=num_samples,
+    #         )
+
+    #         # Average over num_samples
+    #         averaged_downstream_magnitudes = patched_downstream_magnitudes[empty_circuit][0].mean(dim=0)
+    #         downstream_magnitudes_list.append(averaged_downstream_magnitudes)
+            
+    #     downstream_magnitudes = torch.stack(downstream_magnitudes_list, dim=0)
+
     else:
-        downstream_magnitudes = compute_batched_downstream_magnitudes_from_edges(
+        # Compute downstream magnitudes from edges
+        downstream_magnitudes = compute_batched_downstream_magnitudes_from_edges_resid(
             model=model,
             ablator=ablator,
             edges=edges,
@@ -200,20 +212,40 @@ def main():
             num_samples=num_samples
         )
 
+    # NECESSARY?
+    # Prepare data to compute logits
+    # with model.record_activations() as activations:
+    #         with model.use_saes() as encoder_outputs:
+    #             _, _ = model.gpt(input_ids, targets=None)
+    
+    # layer_idx, hook_loc = model.split_sae_key(f'{upstream_layer_num}_mlpout')
+    # resid_mid = activations[f'{layer_idx}_residmid']
+
+    # assert upstream_layer_num == layer_idx, f"Upstream layer number {upstream_layer_num} does not match layer index {layer_idx}"
+
     # Compute logits subcircuit
-    x_reconstructed = model.saes[str(upstream_layer_num + 1)].decode(downstream_magnitudes) 
+    x_reconstructed = model.saes[f'{upstream_layer_num}_residpost'].decode(downstream_magnitudes) 
+    # predicted_logits = model.gpt.forward_with_patched_activations_mlp(
+    #     x_reconstructed, resid_mid, layer_idx, hook_loc
+    # )   # Shape: (num_batches, T, V)
     predicted_logits = model.gpt.forward_with_patched_activations(
-        x_reconstructed, layer_idx=upstream_layer_num + 1
-    )  # Shape: (num_batches, T, V)
+        x_reconstructed, upstream_layer_num + 1
+    )   # Shape: (num_batches, T, V)
+    print(predicted_logits.shape)
 
     # Compute logits full circuit
-    x_reconstructed_full_circuit = model.saes[str(upstream_layer_num + 1)].decode(downstream_magnitudes_full_circuit) 
+    x_reconstructed_full_circuit = model.saes[f'{upstream_layer_num}_residpost'].decode(downstream_magnitudes_full_circuit) 
+    # predicted_logits_full_circuit = model.gpt.forward_with_patched_activations_mlp(
+    #     x_reconstructed_full_circuit, resid_mid, layer_idx, hook_loc
+    # )  # Shape: (num_batches, T, V)
     predicted_logits_full_circuit = model.gpt.forward_with_patched_activations(
-        x_reconstructed_full_circuit, layer_idx=upstream_layer_num + 1
+        x_reconstructed_full_circuit, upstream_layer_num + 1
     )  # Shape: (num_batches, T, V)
+    print(predicted_logits_full_circuit.shape)
 
     # Compute logits full model
     predicted_logits_full_model = model(input_ids, targets=None, is_eval=True).logits
+
 
     # Compute KL divergence between full and subcircuit logits
     probs_full_model = F.softmax(predicted_logits_full_model, dim=-1)
@@ -233,7 +265,7 @@ def main():
     # Compute the time taken for the computation
     execution_time = time.time() - start_time
     print(f"Computation completed in {execution_time:.2f} seconds")
-    
+
     # Create experiment output
     experiment_params = ExperimentParams(
         task="magnitudes",
@@ -281,7 +313,6 @@ def main():
     print(f"- Downstream magnitudes shape: {downstream_magnitudes.shape}")
     print(f"- Downstream logits shape: {predicted_logits.shape}")
     print(f"- Results saved to: {output_path}")
-
 
 if __name__ == "__main__":
     main()

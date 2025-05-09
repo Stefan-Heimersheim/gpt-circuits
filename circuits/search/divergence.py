@@ -9,6 +9,7 @@ from circuits.search.ablation import ResampleAblator
 from data.tokenizers import Tokenizer
 from models.sparsified import SparsifiedGPT
 from models.mlpsparsified import MLPSparsifiedGPT
+from models.factorysparsified import FactorySparsified
 
 
 @dataclass(frozen=True)
@@ -304,6 +305,41 @@ def compute_downstream_magnitudes_mlp(
 
         # Encode to get feature magnitudes
         downstream_sae = model.saes[f'{layer_idx}_mlpout']
+        if include_nonlinearity:
+            downstream_feature_magnitudes = downstream_sae(x_downstream).feature_magnitudes  # Shape: (num_sample, T, F)
+        else:
+            # Encode activations 'by hand' to get feature magnitudes
+            downstream_feature_magnitudes = (x_downstream - downstream_sae.b_dec) @ downstream_sae.W_enc + downstream_sae.b_enc
+
+        # Store results
+        results[circuit_variant] = downstream_feature_magnitudes
+
+    return results
+
+
+@torch.no_grad()
+def compute_downstream_magnitudes_resid(
+    model: FactorySparsified,
+    layer_idx: int,
+    patched_feature_magnitudes: dict[Circuit, torch.Tensor],  # Shape: (num_samples, T, F)
+    include_nonlinearity: bool = True,
+) -> dict[Circuit, torch.Tensor]:  # Shape: (num_sample, T, F)
+    """
+    Get downstream feature magnitudes for a set of circuit variants when using patched feature magnitudes.
+
+    TODO: Use batching to improve performance
+    """
+    results: dict[Circuit, torch.Tensor] = {}
+
+    for circuit_variant, feature_magnitudes in patched_feature_magnitudes.items():
+        # Reconstruct activations
+        block = model.gpt.transformer.h[layer_idx]
+        x_reconstructed = model.saes[f'{layer_idx}_residmid'].decode(feature_magnitudes)  # type: ignore
+        # Compute downstream activations, i.e., residpost
+        x_downstream = block.mlp(block.ln_2(x_reconstructed)) + x_reconstructed
+
+        # Encode to get feature magnitudes
+        downstream_sae = model.saes[f'{layer_idx}_residpost']
         if include_nonlinearity:
             downstream_feature_magnitudes = downstream_sae(x_downstream).feature_magnitudes  # Shape: (num_sample, T, F)
         else:
