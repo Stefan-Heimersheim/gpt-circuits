@@ -14,6 +14,11 @@ from safetensors.torch import load_model, save_model
 from config.sae.models import SAEConfig, SAEVariant
 from config.sae.training import LossCoefficients
 from models.gpt import GPT, MLP
+
+from models.sae.topk import TopKSharedContext
+
+from config.sae.models import HookPoint
+
 from config.gpt.models import NormalizationStrategy
 from models.sparsified import SparsifiedGPT
 from models.sae import EncoderOutput, SparseAutoencoder
@@ -25,6 +30,7 @@ from models.jsaesparsified import JSparsifiedGPT
 from jaxtyping import Float
 from torch import Tensor
 from typing import Literal
+
 class JBlockSparsifiedGPT(SparsifiedGPT):
     def __init__(
         self, 
@@ -32,17 +38,18 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
         loss_coefficients: Optional[LossCoefficients] = None,
         trainable_layers: Optional[tuple] = None,
     ):
+        # TODO: more elegant way to just allow for arbitrary hook points to attach SAEs to,
+        # rather than a jillion different SparsifiedGPT subclasses.
         assert config.sae_variant == SAEVariant.JSAE_BLOCK, f"You must use JSAE_BLOCK variant. See JSparsifiedGPT/SparsifiedGPT for other variants."
         
         nn.Module.__init__(self) 
         self.config = config
         self.loss_coefficients = loss_coefficients
-        config.gpt_config.norm_strategy = NormalizationStrategy.DYNAMIC_TANH
         self.gpt = GPT(config.gpt_config)
         
         assert len(config.n_features) == self.gpt.config.n_layer * 2
         self.layer_idxs = trainable_layers if trainable_layers else list(range(self.gpt.config.n_layer))
-        sae_keys = [f'{x}_{y}' for x in self.layer_idxs for y in ['residmid', 'residpost']]
+        sae_keys = [f'{x}_{y}' for x in self.layer_idxs for y in [HookPoint.RESID_MID.value, HookPoint.RESID_POST.value]]  
         
         sae_class: Type[SparseAutoencoder] = self.get_sae_class(config)
         
@@ -75,7 +82,7 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
             ce_loss_increases = []
             for layer_idx in self.layer_idxs:
                 sae_key = f"{layer_idx}_residmid"
-                sae_logits = self.forward_with_patched_activations(encoder_outputs[sae_key].reconstructed_activations, sae_key)
+                sae_logits = self.forward_with_sae_pair(layer_idx, encoder_outputs[sae_key].reconstructed_activations)
                 sae_ce_loss = F.cross_entropy(sae_logits.view(-1, sae_logits.size(-1)), targets.view(-1))
                 ce_loss_increases.append(sae_ce_loss - cross_entropy_loss)
             ce_loss_increases = torch.stack(ce_loss_increases)
@@ -96,26 +103,20 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
             reconstructed_activations={i: output.reconstructed_activations for i, output in encoder_outputs.items()},
             indices={i: output.indices for i, output in encoder_outputs.items()},
         )
-    
-    def forward_with_patched_activations(self, 
-                                recon: Float[Tensor, "B T n_embd"], 
-                                sae_key: str) -> torch.Tensor:
+        
+    # TODO: would be nice to have all the sparsifyGPTs under one class, and then branchout from there?
+    def forward_with_sae_pair(self, 
+                            layer_idx: int,    
+                            resid_mid_recon: Float[Tensor, "B T n_embd"]) -> torch.Tensor:
         """
         Forward pass of the model with patched activations.
         """
-        layer_idx, hook_loc = self.split_sae_key(sae_key)
+        sae_key = f"{layer_idx}_residpost"
+        block = self.gpt.transformer.h[layer_idx]
+        resid_post = block.mlp(block.ln_2(resid_mid_recon)) + resid_mid_recon
+        resid_post_recon = self.saes[sae_key](resid_post).reconstructed_activations
         
-        if hook_loc == 'residmid':
-            block = self.gpt.transformer.h[layer_idx]
-            resid_post = block.mlp(block.ln_2(recon)) + recon
-        
-        elif hook_loc == 'residpost':
-            resid_post = recon
-        
-        else:
-            raise ValueError(f"Invalid hook location: {hook_loc}")
-        
-        return self.gpt.forward(resid_post, start_at_layer=layer_idx+1).logits
+        return self.gpt.forward(resid_post_recon, start_at_layer=layer_idx+1).logits
             
     
     @contextmanager
@@ -130,11 +131,15 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
         for layer_idx in self.layer_idxs:
             block = self.gpt.transformer.h[layer_idx]
             
-            self.make_cache_post_hook(hooks, act, block, key_out = f"{layer_idx}_residpost")       
-            self.make_grad_hook(hooks, act, block.mlp.gelu, key = f"{layer_idx}_mlpactgrads")
+            self.make_cache_post_hook(hooks, act, block, key_out = f"{layer_idx}_residpost")
+            
+            if "jsae" in self.config.sae_variant:       
+                self.make_grad_hook(hooks, act, block.mlp.gelu, key = f"{layer_idx}_mlpactgrads")
             # Adding two hooks is okay, will execute in order
             self.make_cache_pre_hook(hooks, act, block.ln_2, key_in = f"{layer_idx}_residmid") 
-            self.make_grad_hook(hooks, act, block.ln_2, key = f"{layer_idx}_normactgrads")
+            
+            if "jsae" in self.config.sae_variant:
+                self.make_grad_hook(hooks, act, block.ln_2, key = f"{layer_idx}_normactgrads")
     
         try:
             yield act

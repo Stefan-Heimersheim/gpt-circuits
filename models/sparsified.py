@@ -296,6 +296,11 @@ class SparsifiedGPT(nn.Module):
             return self.gpt.transformer.ln_f  # type: ignore
         raise ValueError(f"Invalid layer index: {layer_idx}")
 
+
+    @classmethod
+    def make(cls, config, loss_coefficients, trainable_layers):
+        return cls(config, loss_coefficients, trainable_layers)
+
     @classmethod
     def load(cls, dir, loss_coefficients=None, trainable_layers=None, device: torch.device = torch.device("cpu")):
         """
@@ -310,10 +315,9 @@ class SparsifiedGPT(nn.Module):
             meta = json.load(f)
         config = SAEConfig(**meta)
         config.gpt_config = gpt.config
-
         # Create model using saved config
-        print(cls)
-        model = cls(config, loss_coefficients, trainable_layers)
+        print(f"Loading {cls.__name__} with config: {config}")
+        model = cls.make(config, loss_coefficients, trainable_layers)
         model.gpt = gpt
 
         # Load SAE weights
@@ -352,6 +356,7 @@ class SparsifiedGPT(nn.Module):
         # Save SAE modules
         for layer_name, module in self.saes.items():
             if layer_name in layers_to_save:
+                print(f"Saving SAE {layer_name}")
                 assert isinstance(module, SparseAutoencoder)
                 module.save(Path(dir))
 
@@ -382,5 +387,7 @@ class SparsifiedGPT(nn.Module):
                 return TopKSAE
             case SAEVariant.JSAE_BLOCK:
                 return TopKSAE
+            case SAEVariant.STAIRCASE_BLOCK:
+                return StaircaseTopKSAE
             case _:
                 raise ValueError(f"Unrecognized SAE variant: {config.sae_variant}")

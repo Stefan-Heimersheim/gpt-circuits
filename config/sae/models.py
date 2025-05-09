@@ -33,6 +33,7 @@ class SAEVariant(str, Enum):
     TOPK_STAIRCASE_DETACH = "topk_staircase_detach"
     JSAE = "jsae"
     JSAE_BLOCK = "jsae_block"
+    STAIRCASE_BLOCK = "staircase_block"
 
 @dataclass
 class SAEConfig(Config):
@@ -57,9 +58,11 @@ class SAEConfig(Config):
 def gen_sae_keys(n_features: tuple, loc : Literal["mlplayer", "mlpblock", "standard"] = 'standard') -> tuple[str, ...]:
     match loc:
         case "mlplayer":
-            return tuple(f"{x}_{y}" for x in range(n_features) for y in [HookPoint.MLP_IN, HookPoint.MLP_OUT])
+            assert n_features % 2 == 0, "n_features must be even for mlpplayer"
+            return tuple(f"{x}_{y}" for x in range(n_features//2) for y in [HookPoint.MLP_IN.value, HookPoint.MLP_OUT.value])
         case "mlpblock":
-            return tuple(f"{x}_{y}" for x in range(n_features) for y in [HookPoint.RESID_MID, HookPoint.RESID_POST])
+            assert n_features % 2 == 0, "n_features must be even for mlpblock"
+            return tuple(f"{x}_{y}" for x in range(n_features//2) for y in [HookPoint.RESID_MID.value, HookPoint.RESID_POST.value])
         case _:
             # assume we're using the activations between the transformer blocks
             # for a 4 layer transformer, this will be:
@@ -68,7 +71,7 @@ def gen_sae_keys(n_features: tuple, loc : Literal["mlplayer", "mlpblock", "stand
             # 2_act = 2_residpre (i.e. between the second and third transformer blocks)
             # 3_act = 3_residpre (i.e. between the third and fourth transformer blocks)
             # 4_act = 3_residpost (i.e. between the fourth/last transformer block and the final layer norm)
-            return tuple(f"{x}_{HookPoint.ACT}" for x in range(n_features))
+            return tuple(f"{x}_{HookPoint.ACT.value}" for x in range(n_features))
 
 # SAE configuration options
 sae_options: dict[str, SAEConfig] = map_options(
@@ -78,6 +81,14 @@ sae_options: dict[str, SAEConfig] = map_options(
         n_features=tuple(64 * n for n in (8, 8, 8, 8, 8, 8, 8, 8)),
         sae_variant=SAEVariant.STANDARD,
         sae_keys=gen_sae_keys(n_features=8, loc="mlplayer"),
+    ),
+    SAEConfig(
+        name="staircase-pairsx8.shakespeare_64x4",
+        gpt_config=gpt_options["ascii_64x4"],
+        n_features=tuple(64 * n for n in (8, 16, 8, 16, 8, 16, 8, 16)),
+        sae_variant=SAEVariant.STAIRCASE_BLOCK,
+        top_k=(10, 10, 10, 10, 10, 10, 10, 10),
+        sae_keys=gen_sae_keys(n_features=8, loc="mlpblock"),
     ),
     SAEConfig(
         name="mlp.topkx8.shakespeare_64x4",

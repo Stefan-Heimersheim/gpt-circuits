@@ -18,12 +18,12 @@ class TopKBase(nn.Module):
     https://arxiv.org/pdf/2406.04093v1
     """
 
-    def __init__(self, layer_idx: int, config: SAEConfig, loss_coefficients: Optional[LossCoefficients], model: nn.Module):
+    def __init__(self, sae_idx: int, config: SAEConfig, loss_coefficients: Optional[LossCoefficients], model: nn.Module):
         nn.Module.__init__(self)
-        self.feature_size = config.n_features[layer_idx]  # SAE dictionary size.
+        self.feature_size = config.n_features[sae_idx]  # SAE dictionary size.
         self.embedding_size = config.gpt_config.n_embd  # GPT embedding size.
         assert config.top_k is not None, "checkpoints/<model_name>/sae.json must contain a 'top_k' key."
-        self.k = config.top_k[layer_idx]
+        self.k = config.top_k[sae_idx]
 
         # Top-k SAE losses do not depend upon any loss coefficients; however, if an empty class is provided,
         # we know that we should compute losses and omit doing so otherwise.
@@ -99,14 +99,15 @@ class TopKSharedContext(nn.Module):
     """
     Contains shared parameters for staircase models
     """
-    def __init__(self, config: SAEConfig):
+    def __init__(self, layer_idx, feature_size, config: SAEConfig):
         super().__init__()
         embedding_size = config.gpt_config.n_embd  # GPT embedding size.
-        feature_size = config.n_features[-1] # Last layer should be the largest and contain a superset of all features.
-        assert feature_size == max(config.n_features)
+        assert feature_size == max(config.n_features), f"Feature size {feature_size} must be the largest in the config.n_features tuple which is {config.n_features}"
+        self.layer_idx = layer_idx
+        self.feature_size = feature_size
 
         device = config.device
-        assert config.sae_variant in [SAEVariant.TOPK_STAIRCASE, SAEVariant.TOPK_STAIRCASE_DETACH], \
+        assert "staircase" in config.sae_variant, \
             f"staircase variant must be used with staircase SAEs, Error: {config.sae_variant}"
         self.W_dec = nn.Parameter(torch.nn.init.kaiming_uniform_(torch.empty(feature_size, embedding_size, device=device)))
         self.W_enc = nn.Parameter(torch.empty(embedding_size, feature_size, device=device))
@@ -118,11 +119,13 @@ class StaircaseTopKSAE(TopKBase, StaircaseBaseSAE, SparseAutoencoder):
     TopKSAEs that share weights between layers, and each child uses slices into weights inside shared context.
     """
 
-    def __init__(self, layer_idx: int, config: SAEConfig, loss_coefficients: Optional[LossCoefficients], model: nn.Module):
+    def __init__(self, sae_idx: int, config: SAEConfig, loss_coefficients: Optional[LossCoefficients], shared_context: nn.Module, is_first: bool = False):
         # We don't want to call init for TopKSAE because we need custom logic for instantiating weight parameters
-        SparseAutoencoder.__init__(self, layer_idx, config, loss_coefficients, model)
-        TopKBase.__init__(self, layer_idx, config, loss_coefficients, model)
-        StaircaseBaseSAE.__init__(self, layer_idx, config, loss_coefficients, model, TopKSharedContext)
+        SparseAutoencoder.__init__(self, sae_idx, config, loss_coefficients, shared_context)
+        TopKBase.__init__(self, sae_idx, config, loss_coefficients, shared_context)
+        self.feature_size = config.n_features[sae_idx]
+        self.shared_context = shared_context
+        self.is_first = is_first
         # All weight parameters are just views from the shared context.
         self.W_dec = self.shared_context.W_dec[:self.feature_size, :]
         self.W_enc = self.shared_context.W_enc[:, :self.feature_size]

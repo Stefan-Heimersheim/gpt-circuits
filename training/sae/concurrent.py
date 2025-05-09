@@ -13,6 +13,7 @@ import torch
 from config import TrainingConfig
 from config.sae.training import SAETrainingConfig, options
 from models.sparsified import SparsifiedGPT, SparsifiedGPTOutput
+from models.factorysparsified import FactorySparsified
 from training.sae import SAETrainer
 
 
@@ -38,8 +39,8 @@ class ConcurrentTrainer(SAETrainer):
         Load and freeze GPT weights before training SAE weights.
         """
         # Create model
-        model = SparsifiedGPT(config.sae_config, config.loss_coefficients, config.trainable_layers)
-
+        model = FactorySparsified.make(config.sae_config, config.loss_coefficients, config.trainable_layers)
+        print(model)
         # Load GPT weights
         model.load_gpt_weights(load_from)
 

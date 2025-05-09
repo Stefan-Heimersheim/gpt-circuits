@@ -15,17 +15,6 @@ class StaircaseBaseSAE():
     """
     TopKSAEs that share weights between layers, and each child uses slices into weights inside shared context.
     """
-
-    def __init__(self, layer_idx: int, config: SAEConfig, loss_coefficients: Optional[LossCoefficients], model: nn.Module, shared_context: Type[nn.Module]):
-
-        # Shared context from which we can get weight parameters.
-        assert "staircase" in config.sae_variant, "staircase variant must be used with staircase SAEs"
-        self.is_first = False
-        if not hasattr(model, "shared_context"):
-            # Initialize the shared context once.
-            self.is_first = True
-            model.shared_context = shared_context(config)
-        self.shared_context = model.shared_context  # type: ignore
         
     def save(self, dirpath: Path) -> None:
         # Save non-shared parameters
@@ -36,7 +25,8 @@ class StaircaseBaseSAE():
 
         # Save shared parameters
         if self.is_first:
-            shared_path = dirpath / "sae.shared.safetensors"
+            shared_path = dirpath / f"sae.shared.{self.shared_context.layer_idx}.safetensors"
+            print(f"Saving shared parameters to {shared_path}")
             save_model(self.shared_context, str(shared_path))
 
     def load(self, dirpath: Path, device: torch.device):
@@ -52,5 +42,6 @@ class StaircaseBaseSAE():
 
         # Load shared parameters
         if self.is_first:
-            shared_path = dirpath / "sae.shared.safetensors"
+            shared_path = dirpath / f"sae.shared.{self.shared_context.layer_idx}.safetensors"
+            print(f"Loading shared parameters from {shared_path}")
             load_model(self.shared_context, shared_path, device=device.type)
