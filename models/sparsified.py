@@ -1,6 +1,7 @@
 import dataclasses
 import json
 import os
+import warnings
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable, Optional, Type
@@ -9,8 +10,9 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from config.sae.models import SAEConfig, SAEVariant
+from config.sae.models import SAEConfig, SAEVariant, gen_sae_keys, HookPoint
 from config.sae.training import LossCoefficients
+
 from models.gpt import GPT
 from models.sae import EncoderOutput, SAELossComponents, SparseAutoencoder
 from models.sae.gated import GatedSAE, GatedSAE_V2
@@ -18,6 +20,7 @@ from models.sae.jumprelu import JumpReLUSAE, StaircaseJumpReLU
 from models.sae.standard import StandardSAE, StandardSAE_V2
 from models.sae.topk import StaircaseTopKSAE, StaircaseTopKSAEDetach, TopKSAE
 
+from jaxtyping import Tensor, Float
 
 @dataclasses.dataclass
 class SparsifiedGPTOutput:
@@ -71,11 +74,18 @@ class SparsifiedGPT(nn.Module):
         self.loss_coefficients = loss_coefficients
         self.gpt = GPT(config.gpt_config)
 
+        if self.config.sae_keys is None:
+            # assume by default we train an sae across activations between transformer blocks
+            warnings.warn("SparsifiedGPT: No SAE keys provided. Go check sae.json, were keys missing?", UserWarning)
+            self.config.sae_keys = gen_sae_keys(config.n_features, loc='standard')
+            warnings.warn(f"SparsifiedGPT: Using default keys: {self.config.sae_keys}", UserWarning)
+
         # Construct sae layers
         sae_class: Type[SparseAutoencoder] = self.get_sae_class(config)
-        self.layer_idxs = trainable_layers if trainable_layers else list(range(len(config.n_features)))
-        self.saes = nn.ModuleDict(dict([(f"{i}", sae_class(i, config, loss_coefficients, self)) for i in self.layer_idxs]))
-        self.config.sae_keys = tuple(self.saes.keys())
+        self.sae_idxs = trainable_layers if trainable_layers else list(range(len(self.config.sae_keys)))
+        self.saes = nn.ModuleDict(
+            dict([(self.config.sae_keys[i], sae_class(i, config, loss_coefficients, self)) for i in self.sae_idxs])
+        )
 
     def forward(
         self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False
@@ -95,18 +105,30 @@ class SparsifiedGPT(nn.Module):
         ce_loss_increases = None
         compound_ce_loss_increase = None
         if is_eval and targets is not None:
-            # Calculate cross-entropy loss increase for each SAE layer
             ce_loss_increases = []
-            for sae_key, output in encoder_outputs.items():
-                resid = output.reconstructed_activations
-                layer_idx, _ = self.split_sae_key(sae_key)
-                sae_logits = self.gpt.forward(resid, start_at_layer=layer_idx).logits
-                sae_ce_loss = F.cross_entropy(sae_logits.view(-1, sae_logits.size(-1)), targets.view(-1))
-                ce_loss_increases.append(sae_ce_loss - cross_entropy_loss)
-            ce_loss_increases = torch.stack(ce_loss_increases)
+            
+            if self.config.sae_variant == SAEVariant.JSAE:
+                
+                for layer_idx in self.layer_idxs:
+                    recon_pre_mlp = encoder_outputs[f'{layer_idx}_{HookPoint.MLP_IN}'].reconstructed_activations
+                    resid_mid = activations[f'{layer_idx}_{HookPoint.RESID_MID}']
+
+                    sae_logits = self.forward_with_patched_pair(recon_pre_mlp, resid_mid, layer_idx)
+                    sae_ce_loss = F.cross_entropy(sae_logits.view(-1, sae_logits.size(-1)), targets.view(-1))
+                    ce_loss_increases.append(sae_ce_loss - cross_entropy_loss)
+                ce_loss_increases = torch.stack(ce_loss_increases)
+            
+            else:
+            # Calculate cross-entropy loss increase for each SAE layer
+                for sae_key, output in encoder_outputs.items():
+                    recon_act = output.reconstructed_activations
+                    sae_logits = self.forward_with_sae(sae_key, recon_act, activations)
+                    sae_ce_loss = F.cross_entropy(sae_logits.view(-1, sae_logits.size(-1)), targets.view(-1))
+                    ce_loss_increases.append(sae_ce_loss - cross_entropy_loss)
+                ce_loss_increases = torch.stack(ce_loss_increases)
 
             # Calculate compound cross-entropy loss as a result of patching activations.
-            with self.use_saes(activations_to_patch=self.layer_idxs):
+            with self.use_saes(activations_to_patch=self.sae_idxs):
                 _, compound_cross_entropy_loss = self.gpt(idx, targets)
                 compound_ce_loss_increase = compound_cross_entropy_loss - cross_entropy_loss
 
@@ -122,17 +144,83 @@ class SparsifiedGPT(nn.Module):
             indices={i: output.indices for i, output in encoder_outputs.items()},
         )
         
-    def split_sae_key(self, sae_key: str) -> tuple[int, str]:
+    
+    def forward_with_patched_pair(self, 
+                                recon_pre_mlp: Float[Tensor, "B T n_embd"], 
+                                resid_mid: Float[Tensor, "B T n_embd"],
+                                layer_idx: int) -> torch.Tensor:
+        """
+        Forward pass of the model with patched activations, using a pair of reconstructed activations.
+        :param recon_pre_mlp: Reconstructed activations just before the MLP. Shape: (B, T, n_embd)
+        :param recon_post_mlp: Reconstructed activations just after the MLP. Shape: (B, T, n_embd)
+        :param resid_mid: Residual stream activations at the middle of the transformer block. Shape: (B, T, n_embd)
+        :param layer_idx: Layer index. 0 patches activations just before the first transformer block.
+        """
+        assert isinstance(recon_pre_mlp, torch.Tensor), f"recon_pre_mlp: {recon_pre_mlp}"
+        assert isinstance(resid_mid, torch.Tensor), f"resid_mid: {resid_mid}"
+        
+        post_mlp = self.gpt.transformer.h[layer_idx].mlp(recon_pre_mlp)
+        post_mlp_recon = self.saes[f'{layer_idx}_{HookPoint.MLP_OUT}'](post_mlp).reconstructed_activations
+        
+        resid_post = post_mlp_recon + resid_mid
+        
+        return self.gpt.forward(resid_post, start_at_layer=layer_idx+1).logits
+        
+    def forward_with_sae(self, sae_key: str, recon_act: torch.Tensor, activations: dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        Forward pass of the sparsified model with a single SAE layer.
+        """
+        layer_idx, hook_location = self.split_sae_key(sae_key)
+        block = self.gpt.transformer.h[layer_idx]
+        attn, ln_2, mlp = block.attn, block.ln_2, block.mlp
+        # recall that match/case do not fall through by default, unlike other languages!      
+        match hook_location:
+            
+            case HookPoint.RESID_PRE: # before the transformer blocks
+                return self.gpt.forward(recon_act, start_at_layer=layer_idx).logits
+            
+            case HookPoint.MLP_OUT: # output of mlp, add back to resid_mid, pass through remaining transformer blocks
+                resid_mid = activations[f"{layer_idx}_{HookPoint.RESID_MID}"]
+                resid_post = resid_mid + recon_act
+            
+            case HookPoint.MLP_IN: #feed into mlp, add back to resid_mid, pass through remaining transformer blocks
+                resid_mid = activations[f"{layer_idx}_{HookPoint.RESID_MID}"]
+                resid_post = resid_mid + mlp(recon_act)
+            
+            case HookPoint.RESID_MID: # between the transformer blocks
+                resid_mid = activations[f"{layer_idx}_{HookPoint.RESID_MID}"]
+                resid_post = recon_act + mlp(ln_2(resid_mid))
+                
+            case HookPoint.RESID_POST: # after the transformer block
+                resid_post = recon_act
+                
+            case HookPoint.ATTN_OUT: # output of attention
+                resid_pre = activations[f"{layer_idx}_{HookPoint.RESID_PRE}"]
+                resid_mid = resid_pre + recon_act
+                resid_post = resid_mid + mlp(ln_2(resid_mid))
+                
+            case HookPoint.ATTN_IN: # input to attention
+                resid_pre = activations[f"{layer_idx}_{HookPoint.RESID_PRE}"]
+                resid_mid = resid_pre + attn(recon_act)
+                resid_post = resid_mid + mlp(ln_2(resid_mid))
+                
+            case _:
+                raise ValueError(f"Invalid hook location: {hook_location}. Must be one of {HookPoint.all()}")
+            
+        # run the rest of the model
+        return self.gpt.forward(resid_post, start_at_layer=layer_idx+1).logits
+        
+    def split_sae_key(self, sae_key: str) -> tuple[int, HookPoint]:
         """
         Split a SAE key into a layer index and hook location.
         """
         items = sae_key.split('_')
-        if len(items) == 1:
-            return int(items[0]), "resid_mid"
-        elif len(items) == 2:
-            return int(items[0]), items[1]
+        if len(items) == 2:
+            layer_idx = int(items[0])
+            hook_location = HookPoint(items[1])
+            return layer_idx, hook_location
         else:
-            raise ValueError(f"Invalid SAE key: {sae_key}")
+            raise ValueError(f"Invalid SAE key format: {sae_key}. Must be in format '{{layer_idx}}_{{hook_location}}'")
         
     def make_grad_hook(self,
                        hooks : list[torch.utils.hooks.RemovableHandle],
@@ -167,86 +255,114 @@ class SparsifiedGPT(nn.Module):
         hooks.append(target.register_forward_hook(activation_grad_hook))
 
     def make_cache_pre_hook(self,
-                        hooks : list[torch.utils.hooks.RemovableHandle],
-                        cache : dict[str, torch.Tensor],
-                        target : nn.Module,
-                        *,
-                        key_in : Optional[str] = None, 
-                        key_out : Optional[str] = None):
-        
-        @torch.compiler.disable(recursive=False)
-        def pre_hook_fn(module, inputs):
-            if key_in is not None:
-                cache[key_in] = inputs[0]
-            return inputs
-        
-        hooks.append(target.register_forward_pre_hook(pre_hook_fn))
-            
+                            hooks : list[torch.utils.hooks.RemovableHandle],
+                            cache : dict[str, torch.Tensor],
+                            target : nn.Module,
+                            key : str):
+        """
+        Cache the input of a module.
+        """
+        return self.make_cache_hook(hooks, cache, target, key, is_prehook = True)
+    
     def make_cache_post_hook(self,
                             hooks : list[torch.utils.hooks.RemovableHandle],
                             cache : dict[str, torch.Tensor],
                             target : nn.Module,
-                            *,
-                            key_in : Optional[str] = None, 
-                            key_out : Optional[str] = None):
-               
+                            key : str):
+        """
+        Cache the output of a module.
+        """
+        return self.make_cache_hook(hooks, cache, target, key, is_prehook = False)
+                        
+    def make_cache_hook(self,
+                        hooks : list[torch.utils.hooks.RemovableHandle],
+                        cache : dict[str, torch.Tensor],
+                        target : nn.Module,
+                        key : str,
+                        is_prehook : bool = True):
+        """
+        Cache the input or output of a module.
+        """
+        @torch.compiler.disable(recursive=False)
+        def pre_hook_fn(module, inputs):
+            cache[key] = inputs[0]
+            return inputs
+        
         @torch.compiler.disable(recursive=False)
         def post_hook_fn(module, inputs, outputs):
-            if key_in is not None:
-                cache[key_in] = inputs[0]
-            if key_out is not None:
-                cache[key_out] = outputs
+            cache[key] = outputs
             return outputs
         
-        hooks.append(target.register_forward_hook(post_hook_fn))
-            
-    def make_sae_pre_hook(self,
+        if is_prehook:
+            hooks.append(target.register_forward_pre_hook(pre_hook_fn))
+        else:
+            hooks.append(target.register_forward_hook(post_hook_fn))
+        
+    def make_sae_hook(self,
                       hooks : list[torch.utils.hooks.RemovableHandle],
                       cache : dict[str, EncoderOutput],
                       target : nn.Module,
                       sae_key : str,
-                      activations_to_patch : Iterable[str] = ()):
+                      activations_to_patch : Iterable[str] = (),
+                      is_prehook : bool = True):
 
         @torch.compiler.disable(recursive=False)  # type: ignore
         def sae_prehook_fn(module, inputs):
             cache[sae_key] = self.saes[sae_key](inputs[0])
             if sae_key in activations_to_patch:
                 return cache[sae_key].reconstructed_activations
-
-        hooks.append(target.register_forward_pre_hook(sae_prehook_fn))
-        
-
-    def make_sae_post_hook(self,
-                           hooks : list[torch.utils.hooks.RemovableHandle],
-                          cache : dict[str, EncoderOutput],
-                          target : nn.Module,
-                          sae_key : str,
-                          activations_to_patch : Iterable[str] = ()):
-        
+            
         @torch.compiler.disable(recursive=False)  # type: ignore
         def sae_posthook_fn(module, inputs, outputs):
             cache[sae_key] = self.saes[sae_key](outputs)
             if sae_key in activations_to_patch:
                 return cache[sae_key].reconstructed_activations
             
-        hooks.append(target.register_forward_hook(sae_posthook_fn))
+        if is_prehook:
+            hooks.append(target.register_forward_pre_hook(sae_prehook_fn))
+        else:
+            hooks.append(target.register_forward_hook(sae_posthook_fn))
 
     @contextmanager
     def record_activations(self):
         """
-        Context manager for recording residual stream activations.
+        Context manager for recording activations.
 
         :yield activations: Dictionary of activations.
         """
         # Dictionary for storing results
         activations: dict[int, torch.Tensor] = {}
-
+        processed_resid_pre = set()
+        processed_resid_mid = set()
+        processed_mlpgrad = set()
         # Register hooks
         hooks = []
-        for layer_idx in list(range(len(self.config.n_features))):
-            target = self.get_hook_target(layer_idx)
-            self.make_cache_pre_hook(hooks, activations, target, key_in = f"{layer_idx}_residmid")
-
+        for sae_key in self.saes.keys():
+           
+            layer_idx, hook_loc = self.split_sae_key(sae_key)
+            target, is_prehook = self.get_hook_target(sae_key)
+            self.make_cache_hook(hooks, activations, target, key = sae_key, is_prehook = is_prehook)
+            
+            
+            if layer_idx not in processed_resid_pre:
+                if hook_loc == HookPoint.ATTN_OUT or hook_loc == HookPoint.ATTN_IN:
+                    # require to cache resid_pre to reconstruct resid_mid
+                    resid_pre_target = self.gpt.transformer.h[layer_idx]
+                    self.make_cache_pre_hook(hooks, activations, resid_pre_target, key_in = f"{layer_idx}_{HookPoint.RESID_PRE}")
+                    processed_resid_pre.add(layer_idx)
+                
+            if layer_idx not in processed_resid_mid:
+                if hook_loc == HookPoint.MLP_IN or hook_loc == HookPoint.MLP_OUT:
+                    # require to cache resid_mid to reconstruct resid_post
+                    resid_mid_target = self.gpt.transformer.h[layer_idx].ln_2
+                    self.make_cache_pre_hook(hooks, activations, resid_mid_target, key_in = f"{layer_idx}_{HookPoint.RESID_MID}")
+                    processed_resid_mid.add(layer_idx)
+            
+            if "jsae" in self.config.sae_variant:
+                if layer_idx not in processed_mlpgrad:
+                    grad_target = self.gpt.transformer.h[layer_idx].mlp.gelu
+                    self.make_grad_hook(hooks, activations, grad_target, key = f"{layer_idx}_mlpgrad")
+                    processed_mlpgrad.add(layer_idx)
         try:
             yield activations
 
@@ -268,10 +384,9 @@ class SparsifiedGPT(nn.Module):
 
         # Register hooks
         hooks = []
-        for layer_idx in self.layer_idxs:
-            target = self.get_hook_target(layer_idx)
-            self.make_sae_pre_hook(hooks, encoder_outputs, target, str(layer_idx), activations_to_patch)
-
+        for sae_key in self.saes.keys():
+            target, is_prehook = self.get_hook_target(sae_key)
+            self.make_sae_hook(hooks, encoder_outputs, target, sae_key, activations_to_patch, is_prehook)
 
         try:
             yield encoder_outputs
@@ -282,16 +397,42 @@ class SparsifiedGPT(nn.Module):
                 hook.remove()
 
 
-    def get_hook_target(self, layer_idx) -> nn.Module:
+    def get_hook_target(self, sae_key: str) -> tuple[nn.Module, bool]:
         """
         SAE layer -> Targeted module for forward pre-hook.
         """
+        layer_idx, hook_loc = self.split_sae_key(sae_key)
+        
+        if layer_idx == self.config.gpt_config.n_layer and hook_loc == HookPoint.ACT:
+            return self.gpt.transformer.ln_f, True
+        
         if layer_idx < self.config.gpt_config.n_layer:
-            return self.gpt.transformer.h[layer_idx]  # type: ignore
-        elif layer_idx == self.config.gpt_config.n_layer:
-            return self.gpt.transformer.ln_f  # type: ignore
-        raise ValueError(f"Invalid layer index: {layer_idx}")
-
+            block = self.gpt.transformer.h[layer_idx]
+            
+            match hook_loc:
+                case HookPoint.RESID_PRE:
+                    target, is_prehook = block, True
+                case HookPoint.MLP_IN:
+                    target, is_prehook = block.mlp, True
+                case HookPoint.MLP_OUT:
+                    target, is_prehook = block.mlp, False
+                case HookPoint.RESID_MID:
+                    target, is_prehook = block.ln_2, True
+                case HookPoint.RESID_POST:
+                    target, is_prehook = block, False
+                case HookPoint.ATTN_OUT:
+                    target, is_prehook = block.attn, False
+                case HookPoint.ATTN_IN:
+                    target, is_prehook = block.attn, True
+                case _:
+                    raise ValueError(f"Invalid hook location: {hook_loc}")
+            
+            return target, is_prehook
+        
+        if layer_idx > self.config.gpt_config.n_layer:
+            raise ValueError(f"Invalid layer index: {layer_idx}")
+        
+    
     @classmethod
     def load(cls, dir, loss_coefficients=None, trainable_layers=None, device: torch.device = torch.device("cpu")):
         """
