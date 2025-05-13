@@ -47,7 +47,9 @@ class FactorySparsified(SparsifiedGPT):
         model = super().load(dir, loss_coefficients, trainable_layers, device)
     
         # Dirty hack while I find the real cause of the bug
-        if isinstance(model, StaircaseBlockSparsifiedGPT):
+        #if isinstance(model, StaircaseBlockSparsifiedGPT):
+        #TODO: fix this!!
+        if "staircase" in model.config.sae_variant:
             for key, sae in model.saes.items():
                 model.saes[key].shared_context.W_dec.data = sae.shared_context.W_dec.data.to(device)
                 model.saes[key].shared_context.W_enc.data = sae.shared_context.W_enc.data.to(device)
