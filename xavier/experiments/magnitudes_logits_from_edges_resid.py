@@ -85,6 +85,8 @@ def main():
         mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
     elif sae_variant == "jsae":
         mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
+    elif sae_variant == "staircase":
+        mlp_dir = checkpoint_dir / f"{sae_variant}-mlpblock.shk_64x4"
     else:
         mlp_dir = checkpoint_dir / f"jblock.shk_64x4-sparse-{sae_variant}"
 
