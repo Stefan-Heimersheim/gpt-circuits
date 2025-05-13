@@ -47,7 +47,7 @@ class StaircaseBlockSparsifiedGPT(JBlockSparsifiedGPT):
         self.loss_coefficients = loss_coefficients
         self.gpt = GPT(config.gpt_config)
         
-        assert len(config.n_features) == self.gpt.config.n_layer * 2
+        assert len(config.n_features) == self.gpt.config.n_layer * 2, f"StaircaseBlockSparsifiedGPT: n_features must be twice the number of layers. Got {len(config.n_features)} and {self.gpt.config.n_layer}."
         self.layer_idxs = trainable_layers if trainable_layers else list(range(self.gpt.config.n_layer))
         
         self.sae_keys = [f'{x}_{y}' for x in self.layer_idxs for y in (HookPoint.RESID_MID.value, HookPoint.RESID_POST.value)]

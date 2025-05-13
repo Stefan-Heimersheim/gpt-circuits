@@ -17,8 +17,9 @@ from models.sae.gated import GatedSAE, GatedSAE_V2
 from models.sae.jumprelu import JumpReLUSAE, StaircaseJumpReLU
 from models.sae.standard import StandardSAE, StandardSAE_V2
 from models.sae.topk import StaircaseTopKSAE, StaircaseTopKSAEDetach, TopKSAE
+from config.sae.models import HookPoint
 
-
+import warnings
 @dataclasses.dataclass
 class SparsifiedGPTOutput:
     """
@@ -74,8 +75,10 @@ class SparsifiedGPT(nn.Module):
         # Construct sae layers
         sae_class: Type[SparseAutoencoder] = self.get_sae_class(config)
         self.layer_idxs = trainable_layers if trainable_layers else list(range(len(config.n_features)))
-        self.saes = nn.ModuleDict(dict([(f"{i}", sae_class(i, config, loss_coefficients, self)) for i in self.layer_idxs]))
-        self.config.sae_keys = tuple(self.saes.keys())
+        warnings.warn("SparsifiedGPT: Use of self.saes[i] is deprecated. Use self.saes[f'{i}_{HookPoint.ACT.value}'] instead.")
+        self.saes = nn.ModuleDict(dict([(f"{i}_{HookPoint.ACT.value}", sae_class(i, config, loss_coefficients, self)) for i in self.layer_idxs]))
+        if self.config.sae_keys is None:
+            self.config.sae_keys = tuple(self.saes.keys())
         
         assert config.sae_variant != SAEVariant.JSAE, f"JSAE not supported for SparsifiedGPT. See JSparsifiedGPT."
         assert config.sae_variant != SAEVariant.JSAE_BLOCK, f"JSAE_BLOCK not supported for SparsifiedGPT. See JBlockSparsifiedGPT."
@@ -274,7 +277,7 @@ class SparsifiedGPT(nn.Module):
         hooks = []
         for layer_idx in self.layer_idxs:
             target = self.get_hook_target(layer_idx)
-            self.make_sae_pre_hook(hooks, encoder_outputs, target, str(layer_idx), activations_to_patch)
+            self.make_sae_pre_hook(hooks, encoder_outputs, target, f"{layer_idx}_{HookPoint.ACT.value}", activations_to_patch)
 
 
         try:

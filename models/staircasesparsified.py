@@ -31,6 +31,8 @@ from jaxtyping import Float
 from torch import Tensor
 from typing import Literal
 
+import warnings
+
 class StaircaseSparsifiedGPT(SparsifiedGPT):
     def __init__(
         self, 
@@ -46,11 +48,9 @@ class StaircaseSparsifiedGPT(SparsifiedGPT):
         self.config = config
         self.loss_coefficients = loss_coefficients
         self.gpt = GPT(config.gpt_config)
-        
-        assert len(config.n_features) == self.gpt.config.n_layer + 1
-        self.layer_idxs = trainable_layers if trainable_layers else list(range(self.gpt.config.n_layer))
-        
-        self.sae_keys = [f'{x}_{HookPoint.ACT.value}' for x in self.layer_idxs]
+        warnings.warn("StaircaseSparsifiedGPT: Use of self.saes[i] is deprecated. Use self.saes[f'{i}_{HookPoint.ACT.value}'] instead.")
+        assert len(config.n_features) == self.gpt.config.n_layer + 1, f"StaircaseSparsifiedGPT: n_features must be one more than the number of layers. Got {len(config.n_features)} and {self.gpt.config.n_layer}."
+        self.layer_idxs = trainable_layers if trainable_layers else list(range(len(config.n_features)))
 
         self.saes = {}
         self.shared_context = TopKSharedContext(0, config.n_features[-1], config)
@@ -58,7 +58,8 @@ class StaircaseSparsifiedGPT(SparsifiedGPT):
             is_biggest = i == self.layer_idxs[-1]
             self.saes[f'{i}_{HookPoint.ACT.value}'] = StaircaseTopKSAE(i, config, loss_coefficients, self.shared_context, is_first = is_biggest)
             # Alias i to i_act
-            self.saes[f'{i}'] = self.saes[f'{i}_{HookPoint.ACT.value}']
+            #self.saes[f'{i}'] = self.saes[f'{i}_{HookPoint.ACT.value}']
+        self.sae_keys = self.saes.keys()
                 
         self.saes = nn.ModuleDict(self.saes)
         
