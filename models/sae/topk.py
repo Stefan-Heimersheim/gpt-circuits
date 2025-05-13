@@ -126,20 +126,17 @@ class StaircaseTopKSAE(TopKBase, StaircaseBaseSAE, SparseAutoencoder):
         self.feature_size = config.n_features[sae_idx]
         self.shared_context = shared_context
         self.is_first = is_first
-        # All weight parameters are just views from the shared context.
-        self.W_dec = self.shared_context.W_dec[:self.feature_size, :]
-        self.W_enc = self.shared_context.W_enc[:, :self.feature_size]
-        # Each layer has it's own bias parameters.
         self.b_enc = nn.Parameter(torch.zeros(self.feature_size))
         self.b_dec = nn.Parameter(torch.zeros(self.embedding_size))
         
-        # self.W_dec = nn.Parameter(torch.nn.init.kaiming_uniform_(torch.empty(feature_size - prev_feature_size, embedding_size)))
-        # self.W_enc = nn.Parameter(torch.empty(embedding_size, feature_size - prev_feature_size))
-        # self.W_enc.data = self.W_dec.data.T.detach().clone()  # initialize W_enc from W_dec
-        #should the biases be shared, or should each layer have it's own bias?
-        #self.b_enc = shared_context.b_enc[:feature_size]
-        # self.b_dec = shared_context.b_dec
-        
+    @property
+    def W_dec(self):
+        return self.shared_context.W_dec[:self.feature_size, :]
+
+    @property
+    def W_enc(self):
+        return self.shared_context.W_enc[:, :self.feature_size]
+
 class StaircaseTopKSAEDetach(TopKBase, StaircaseBaseSAE, SparseAutoencoder):
     """
     TopKSAEs that share weights between layers, and each child uses slices into weights inside shared context.
