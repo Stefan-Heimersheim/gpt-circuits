@@ -54,3 +54,22 @@ To run the staircase SAE, use:
 python -m training.sae.staircase_concurrent --config=topk-staircase-share.shakespeare_64x4 --load_from=shakespeare_64x4
 python -m training.sae.concurrent --config=topk-staircase-noshare.shakespeare_64x4 --load_from=shakespeare_64x4
 ```
+
+### SAE location conventions
+
+SAE keys are of the format `{layer_idx}_{hook_point}`.
+
+See [config.sae.models.HookPoint](config/sae/models.py) for the available hook points.
+
+Use `HookPoint.ACT.value` to refer to activations between transformer block layers.
+For a Transformer with 4 layers, the SAE keys are:
+`0_act`, `1_act`, `2_act`, `3_act`, `4_act`
+corresponding to the keys:
+`0_residpre`, `1_residpre`, `2_residpre`, `3_residpre`, `3_residpost`
+
+For SAEs that come in pairs, the keys are:
+`0_residmid`, `0_residpost`, `1_residmid`, `1_residpost`, ... `3_residmid`, `3_residpost`
+OR
+`0_mlpin`, `0_mlpout`, `1_mlpin`, `1_mlpout`, ... `3_mlpin`, `3_mlpout`
+
+
