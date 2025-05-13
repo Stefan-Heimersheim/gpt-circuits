@@ -3,15 +3,19 @@
 
 # Default parameters
 NUM_SAMPLES=2
-NUM_PROMPTS=2
+NUM_PROMPTS=50
 SEED=125
 
 # Parameters to loop over
-RUN_INDEX="testing"
-EDGE_SELECTIONS=("random")
-UPSTREAM_LAYERS=(0)
-EDGE_SET=(10 29136 58262 87388 116514 145640 174766 203892 233018 262144)
-SAE_VARIANTS=("standard" "topk")
+RUN_INDEX="residpre-residpost_50P_v1"
+EDGE_SELECTIONS=("gradient")
+UPSTREAM_LAYERS=(1 2 3 0)
+SAE_VARIANTS=("topk-staircase-share" "standard" "top5" "topk" "top20")
+EDGE_SET=(1      2      4      5      7     11     16     22     32     45
+     63     90    127    181    256    362    512    724   1024   1448
+   2048   2896   4095   5792   8191  11585  16383  23170  32768  46340
+  65536  92681 131072 185363 262144)
+
 
 # Create log directory if it doesn't exist
 LOG_DIR="xavier/experiments/logs"
@@ -68,12 +72,3 @@ done
 
 
 echo "All data generation completed!"
-
-# Basic plotting 
-python xavier/experiments/basic_plotting.py \
-  --run-index $RUN_INDEX \
-  --sae-variant "${SAE_VARIANTS[@]}" \
-  --edge-selections "${EDGE_SELECTIONS[@]}" \
-  --upstream-layers "${UPSTREAM_LAYERS[@]}"
-
-echo "Plotting completed!"

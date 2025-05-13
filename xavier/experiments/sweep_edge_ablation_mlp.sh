@@ -3,15 +3,18 @@
 
 # Default parameters
 NUM_SAMPLES=2
-NUM_PROMPTS=3
+NUM_PROMPTS=50
 SEED=125
 
 # Parameters to loop over
-RUN_INDEX="jsae"
+RUN_INDEX="mlpin-mlpout_50P_v1"
 EDGE_SELECTIONS=("gradient")
-UPSTREAM_LAYERS=(3)
-EDGE_SET=(10 29136 58262 87388 116514 145640 174766 203892 233018 262143 262144)
-SAE_VARIANTS=("1.0e-03" "1.2e-03" "1.5e-03" "1.8e-03" "2.2e-03" "2.7e-03" "3.3e-03" "3.9e-03" "4.7e-03" "5.6e-03" "6.8e-03" "1.0e-02")
+UPSTREAM_LAYERS=(1 2 3 0)
+SAE_VARIANTS=("0.0ep00" "1.0e-03" "1.2e-03" "1.5e-03" "1.8e-03" "2.2e-03" "2.7e-03" "3.3e-03" "3.9e-03" "4.7e-03" "5.6e-03" "6.8e-03" "1.0e-02")
+EDGE_SET=(1      2      4      5      7     11     16     22     32     45
+     63     90    127    181    256    362    512    724   1024   1448
+   2048   2896   4095   5792   8191  11585  16383  23170  32768  46340
+  65536  92681 131072 185363 262144)
 
 # Create log directory if it doesn't exist
 LOG_DIR="xavier/experiments/logs"
