@@ -152,7 +152,7 @@ def main():
         edge_arr = all_edges[:num_edges]
 
     elif edge_selection == "gradient":
-        gradient_dir = project_root / f"attributions/jsae.shakespeare_64x4-sparsity-{sae_variant}-20k.safetensors"
+        gradient_dir = project_root / f"SPAR-attributions/jsae.shakespeare_64x4-sparsity-{sae_variant}-20k.safetensors"
         tensors = load_file(gradient_dir)
         all_edges, _ = get_attribution_rankings(tensors[f'{2*upstream_layer_num}-{2*upstream_layer_num + 1}'])
         edge_arr = all_edges[:num_edges]

@@ -22,6 +22,7 @@ sys.path.append(str(project_root))
 from config.sae.models import SAEConfig
 from models.sparsified import SparsifiedGPT
 from models.gpt import GPT
+from models.factorysparsified import FactorySparsified
 from circuits import Circuit, Edge, Node, TokenlessNode, TokenlessEdge
 from circuits.features.cache import ModelCache
 from circuits.features.profiles import ModelProfile
@@ -41,7 +42,7 @@ def main():
     parser.add_argument("--edge-selection", type=str, default="random", 
                         choices=["random", "gradient", "gradient_reversed", "manual_scaled", "manual_pos_scaled", "manual_unscaled"], help="Edge selection strategy")
     parser.add_argument("--sae-variant", type=str, default="standard", 
-                        choices=["standard", "topk", "topk-x40", "topk-staircase", "jumprelu", "regularized", "top5", "top20", "topk"], help="Type of SAE")
+                        choices=["topk-staircase-share", "standard", "top5", "topk", "top20"], help="Type of SAE")
     parser.add_argument("--run-index", type=str, default="testing", help="Index of the run")
     parser.add_argument("--seed", type=int, default=125, help="Random seed")
     args = parser.parse_args()
@@ -72,33 +73,21 @@ def main():
     # Setup model paths
     checkpoint_dir = project_root / "checkpoints"
     gpt_dir = checkpoint_dir / "shakespeare_64x4"
-    sae_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
-    # sae_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
     data_dir = project_root / "data"
-    
+    mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
+
     # Load GPT model
     print("Loading GPT model...")
-    gpt = GPT.load(gpt_dir, device=device)
-    
+
+    model = FactorySparsified.load(mlp_dir, device=device)
+    model.to(device)
+
     # Load SAE config
-    print("Loading SAE configuration...")
-    sae_config_dir = sae_dir / "sae.json"
-    with open(sae_config_dir, "r") as f:
+    meta_path = os.path.join(mlp_dir, "sae.json")
+    with open(meta_path, "r") as f:
         meta = json.load(f)
     config = SAEConfig(**meta)
-    config.gpt_config = gpt.config
-    
-    # Create SparsifiedGPT model
-    print("Creating SparsifiedGPT model...")
-    model = SparsifiedGPT(config)
-    model.gpt = gpt
-    
-    # Load SAE weights
-    print("Loading SAE weights...")
-    for layer_name, module in model.saes.items():
-        weights_path = os.path.join(sae_dir, f"sae.{layer_name}.safetensors")
-        load_model(module, weights_path, device=device.type)
-    
+
     # Create a model profile (will only work for zero ablation)
     model_profile = ModelProfile()
 
@@ -148,36 +137,36 @@ def main():
         edge_arr = all_edges[:num_edges]
 
     elif edge_selection == "gradient":
-        gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_igattributions.safetensors"
+        gradient_dir = project_root / f"SPAR-attributions/{sae_variant}.shakespeare_64x4"
         tensors = load_file(gradient_dir)
         all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
         edge_arr = all_edges[:num_edges]
 
-    elif edge_selection == "gradient_reversed":
-        gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_igattributions.safetensors"
-        tensors = load_file(gradient_dir)
-        all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
-        edge_arr = all_edges[:num_edges]
-        all_edges_reversed = all_edges[::-1]
-        edge_arr = all_edges_reversed[:num_edges]
+    # elif edge_selection == "gradient_reversed":
+    #     gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_igattributions.safetensors"
+    #     tensors = load_file(gradient_dir)
+    #     all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
+    #     edge_arr = all_edges[:num_edges]
+    #     all_edges_reversed = all_edges[::-1]
+    #     edge_arr = all_edges_reversed[:num_edges]
 
-    elif edge_selection == "manual_scaled":
-        gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_manual_ablation_scaled.safetensors"
-        tensors = load_file(gradient_dir)
-        all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
-        edge_arr = all_edges[:num_edges]
+    # elif edge_selection == "manual_scaled":
+    #     gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_manual_ablation_scaled.safetensors"
+    #     tensors = load_file(gradient_dir)
+    #     all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
+    #     edge_arr = all_edges[:num_edges]
 
-    elif edge_selection == "manual_pos_scaled":
-        gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_manual_ablation_pos_scaled.safetensors"
-        tensors = load_file(gradient_dir)
-        all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
-        edge_arr = all_edges[:num_edges]
+    # elif edge_selection == "manual_pos_scaled":
+    #     gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_manual_ablation_pos_scaled.safetensors"
+    #     tensors = load_file(gradient_dir)
+    #     all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
+    #     edge_arr = all_edges[:num_edges]
 
-    elif edge_selection == "manual_unscaled":
-        gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_manual_ablation_unscaled.safetensors"
-        tensors = load_file(gradient_dir)
-        all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
-        edge_arr = all_edges[:num_edges]
+    # elif edge_selection == "manual_unscaled":
+    #     gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_manual_ablation_unscaled.safetensors"
+    #     tensors = load_file(gradient_dir)
+    #     all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
+    #     edge_arr = all_edges[:num_edges]
     
     # Create TokenlessEdge objects
     edges = create_tokenless_edges_from_array(edge_arr, upstream_layer_num)

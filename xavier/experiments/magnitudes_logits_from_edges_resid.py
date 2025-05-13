@@ -85,6 +85,8 @@ def main():
         mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
     elif sae_variant == "jsae":
         mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
+    elif sae_variant == "staircase":
+        mlp_dir = checkpoint_dir / f"{sae_variant}-mlpblock.shk_64x4"
     else:
         mlp_dir = checkpoint_dir / f"jblock.shk_64x4-sparse-{sae_variant}"
 
@@ -152,10 +154,15 @@ def main():
         edge_arr = all_edges[:num_edges]
 
     elif edge_selection == "gradient":
-        gradient_dir = project_root / f"attributions/jsae.shakespeare_64x4-sparsity-{sae_variant}-20k.safetensors"
+        if sae_variant == "staircase":
+            gradient_dir = project_root / f"SPAR-attributions/staircase-mlpblock.shk_64x4.safetensors"
+        else:
+            gradient_dir = project_root / f"SPAR-attributions/jblock.shk_64x4-sparse-{sae_variant}"
+        
         tensors = load_file(gradient_dir)
-        all_edges, _ = get_attribution_rankings(tensors[f'{2*upstream_layer_num}-{2*upstream_layer_num + 1}'])
+        all_edges, _ = get_attribution_rankings(tensors[f'MLP_BLOCK_{upstream_layer_num}'])
         edge_arr = all_edges[:num_edges]
+
 
     # Create TokenlessEdge objects
     edges = create_tokenless_edges_from_array(edge_arr, upstream_layer_num)
@@ -170,36 +177,6 @@ def main():
         # Use the full circuit magnitudes
         print(f"Using full circuit magnitudes...")
         downstream_magnitudes = downstream_magnitudes_full_circuit
-
-    # elif num_edges == 0:
-    #     # Create a dummy circuit for the ablator
-    #     empty_circuit = Circuit(nodes=frozenset()) # Dummy circuit not used for downstream computation
-        
-    #     downstream_magnitudes_list = []
-    #     for i in range(num_prompts):
-    #         dummy_downstream = compute_downstream_magnitudes_mlp(  # Shape: (num_samples, T, F)
-    #             model,
-    #             upstream_layer_num,
-    #             {empty_circuit: upstream_magnitudes[i].unsqueeze(0)}
-    #         )
-    #         dummy_downstream_magnitudes = dummy_downstream[empty_circuit].squeeze(0)
-    #         print(dummy_downstream_magnitudes.shape)
-
-    #         # Initialise the result tensor as the patched downstream magnitudes
-    #         patched_downstream_magnitudes = patch_feature_magnitudes(  # Shape: (num_samples, T, F)
-    #             ablator,
-    #             upstream_layer_num + 1,
-    #             target_token_idx,
-    #             [empty_circuit],
-    #             dummy_downstream_magnitudes,
-    #             num_samples=num_samples,
-    #         )
-
-    #         # Average over num_samples
-    #         averaged_downstream_magnitudes = patched_downstream_magnitudes[empty_circuit][0].mean(dim=0)
-    #         downstream_magnitudes_list.append(averaged_downstream_magnitudes)
-            
-    #     downstream_magnitudes = torch.stack(downstream_magnitudes_list, dim=0)
 
     else:
         # Compute downstream magnitudes from edges
