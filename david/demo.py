@@ -6,6 +6,13 @@ import torch
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 torch.set_grad_enabled(False)
+
+# Path setup
+# Get current directory and keep going up until we find gpt-circuits root
+while not os.getcwd().endswith("gpt-circuits"):
+    os.chdir("..")
+print(os.getcwd())
+
 # %%
 from models.gpt import GPT
 from models.sparsified import SparsifiedGPT
@@ -94,7 +101,7 @@ def evaluate_model(model, val_loader):
 if __name__ == "__main__":
     gpt, tokenizer = load_gpt_model()
     print("-----------------")
-    print(generate(gpt, tokenizer, "Today I thought,", max_length=100))
+    print(gpt_generate(gpt, tokenizer, "Today I thought,", max_length=100))
     print("-----------------")
     config, sae_dir = load_sae_config(gpt)
     model = create_sparsified_gpt_model(config, gpt, sae_dir, device)
