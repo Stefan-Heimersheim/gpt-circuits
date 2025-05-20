@@ -1,0 +1,1 @@
+python -m attributions.compute_attributions --load_from=checkpoints/top20.shakespeare_64x4 --save_to=attributions/data --data_dir=data/shakespeare --save_name=top20.shakespeare_64x4 --num_batches=2 --batch_size=2 --steps=2 --attribution_method=ig
