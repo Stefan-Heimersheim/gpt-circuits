@@ -22,7 +22,7 @@ from models.sparsified import SparsifiedGPT
 from safetensors.torch import load_model
 from data.tokenizers import ASCIITokenizer, TikTokenTokenizer
 from config.sae.models import SAEConfig
-from david.utils import gpt_generate
+from demo.utils import gpt_generate
 import json
 from pathlib import Path
 import numpy as np

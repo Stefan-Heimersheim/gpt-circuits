@@ -23,8 +23,8 @@ from models.gpt import GPT
 from models.factorysparsified import FactorySparsified
 from models.mlpsparsified import MLPSparsifiedGPT
 from data.tokenizers import ASCIITokenizer
-from david.convert_to_tl import convert_gpt_to_transformer_lens
-from david.convert_to_tl import run_tests as run_tl_tests
+from demo.convert_to_tl import convert_gpt_to_transformer_lens
+from demo.convert_to_tl import run_tests as run_tl_tests
 from xavier.utils import create_tokenless_edges_from_array, get_attribution_rankings
 
 from circuits import Circuit

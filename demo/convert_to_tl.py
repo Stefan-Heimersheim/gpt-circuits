@@ -16,7 +16,7 @@ import torch
 from transformers import AutoTokenizer
 from transformers import PreTrainedTokenizer
 
-from david.utils import generate
+from demo.utils import generate
 
 def define_model(name):
     config = options[name]

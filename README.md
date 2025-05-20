@@ -55,6 +55,10 @@ python -m training.sae.staircase_concurrent --config=topk-staircase-share.shakes
 python -m training.sae.concurrent --config=topk-staircase-noshare.shakespeare_64x4 --load_from=shakespeare_64x4
 ```
 
+See `/run` for commands to train the SAEs.
+
+All our ours models can also be downloaded directly from huggingface: [LINK REDACTED]
+
 ### SAE location conventions
 
 SAE keys are of the format `{layer_idx}_{hook_point}`.

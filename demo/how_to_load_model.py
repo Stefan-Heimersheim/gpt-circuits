@@ -14,7 +14,7 @@ from config.sae.training import LossCoefficients
 from models.factorysparsified import FactorySparsified
 from data.tokenizers import ASCIITokenizer
 
-from david.utils import generate_with_saes
+from demo.utils import generate_with_saes
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 

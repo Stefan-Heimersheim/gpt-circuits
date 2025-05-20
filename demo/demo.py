@@ -19,7 +19,7 @@ from models.sparsified import SparsifiedGPT
 from safetensors.torch import load_model
 from data.tokenizers import ASCIITokenizer
 from config.sae.models import SAEConfig
-from david.utils import generate
+from demo.utils import generate
 import json
 from pathlib import Path
 import numpy as np
