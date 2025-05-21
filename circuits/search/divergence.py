@@ -264,13 +264,13 @@ def compute_downstream_magnitudes(
 
     for circuit_variant, feature_magnitudes in patched_feature_magnitudes.items():
         # Reconstruct activations
-        x_reconstructed = model.saes[str(layer_idx)].decode(feature_magnitudes)  # type: ignore
+        x_reconstructed = model.saes[f'{layer_idx}_act'].decode(feature_magnitudes)  # type: ignore
 
         # Compute downstream activations
         x_downstream = model.gpt.transformer.h[layer_idx](x_reconstructed)  # type: ignore
 
         # Encode to get feature magnitudes
-        downstream_sae = model.saes[str(layer_idx + 1)]
+        downstream_sae = model.saes[f'{layer_idx + 1}_act']
         if include_nonlinearity:
             downstream_feature_magnitudes = downstream_sae(x_downstream).feature_magnitudes  # Shape: (num_sample, T, F)
         else:

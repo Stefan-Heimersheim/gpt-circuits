@@ -1,0 +1,29 @@
+# Training output
+checkpoints/
+attributions/
+*.npy
+
+# Node app
+app/build/
+app/dist/
+app/node_modules/
+app/public/samples/
+
+# OS files
+.DS_Store
+.vscode/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/ 
+myenv/
+
+# Data
+attributions/data/
+ablation/data/
+ablation/logs/
+

@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from safetensors.torch import load_model, load_file, save_file
 
 # Path setup
-project_root = Path(__file__).parent.parent.parent
+project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
 from config.sae.models import SAEConfig, SAEVariant
@@ -294,7 +294,7 @@ def main():
  
     # Save results
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    output_dir = project_root / f"data/{run_idx}"
+    output_dir = project_root / f"ablation/data/{run_idx}"
     output_path = output_dir / f"{experiment_output.experiment_id}_{timestamp}.safetensors"
     if not output_dir.exists():
             output_dir.mkdir(parents=True, exist_ok=True)

@@ -1,46 +1,36 @@
-import os
-import sys  # Add this import
 import torch
-import random
+import sys
+import os
+from pathlib import Path
 import time
 import datetime
-from pathlib import Path
+import random
 import numpy as np
 import json
 import argparse
-from transformer_lens.hook_points import HookPoint
-import torch.nn.functional as F
 from safetensors.torch import load_model, load_file, save_file
+import torch.nn.functional as F
 
 # Path setup
-project_root = Path(__file__).parent.parent.parent
+project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
-from config.sae.models import SAEConfig, SAEVariant
-from config.sae.training import LossCoefficients
-from models.sae.topk import StaircaseTopKSAE
+# Imports from the project
+from config.sae.models import SAEConfig
+from models.sparsified import SparsifiedGPT
 from models.gpt import GPT
 from models.factorysparsified import FactorySparsified
-from models.mlpsparsified import MLPSparsifiedGPT
-from data.tokenizers import ASCIITokenizer
-from demo.convert_to_tl import convert_gpt_to_transformer_lens
-from demo.convert_to_tl import run_tests as run_tl_tests
-from ablation.utils import create_tokenless_edges_from_array, get_attribution_rankings
-
-from circuits import Circuit
-from circuits.search.divergence import (
-    compute_downstream_magnitudes_mlp,
-    patch_feature_magnitudes,
-)
+from circuits import Circuit, Edge, Node, TokenlessNode, TokenlessEdge
 from circuits.features.cache import ModelCache
 from circuits.features.profiles import ModelProfile
 from circuits.search.ablation import ResampleAblator
-from circuits.search.edges import compute_batched_downstream_magnitudes_from_edges_mlp, compute_batched_downstream_magnitudes_from_edges_resid
+from circuits.search.edges import compute_batched_downstream_magnitudes_from_edges
 from ablation import ExperimentParams, ExperimentResults, ExperimentOutput
+from ablation.utils import create_tokenless_edges_from_array, get_attribution_rankings
 
-@torch.no_grad()
+# caviar
+
 def main():
-
     # Parse arguments
     parser = argparse.ArgumentParser(description="Compute downstream magnitudes & logits from edges")
     parser.add_argument("--num-edges", type=int, default=100, help="Number of edges to use")
@@ -49,9 +39,8 @@ def main():
     parser.add_argument("--num-prompts", type=int, default=1, help="Number of prompts to use from validation data")
     parser.add_argument("--edge-selection", type=str, default="random", 
                         choices=["random", "gradient", "gradient_reversed", "manual_scaled", "manual_pos_scaled", "manual_unscaled"], help="Edge selection strategy")
-    parser.add_argument("--sae-variant", type=str, default="standard", help="Type of SAE")
-    #parser.add_argument("--sae-variant", type=str, default="standard", 
-                        #choices=["standard", "topk", "topk-x40", "topk-staircase", "jumprelu", "regularized", "top5", "top20", "topk", "mlp-topk", "jsae", "1e0", "1e-1", "1e-2", "1e-3", "2e-1", "2e-2", "5e-1", "5e-2", "5e-3"], help="Type of SAE")
+    parser.add_argument("--sae-variant", type=str, default="standard", 
+                        choices=["topk-staircase-share", "standard", "top5", "topk", "top20"], help="Type of SAE")
     parser.add_argument("--run-index", type=str, default="testing", help="Index of the run")
     parser.add_argument("--seed", type=int, default=125, help="Random seed")
     args = parser.parse_args()
@@ -68,27 +57,22 @@ def main():
     run_idx = args.run_index
     seed = args.seed
 
+    if edge_selection == "outer":
+        assert upstream_layer_num==3, "Only layer 3 is supported for outer product"
+        assert num_prompts==1, "Only 1 prompt is supported for outer product"
+
     # Set random seed
     random.seed(seed)
-
+    
     # Device setup
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-
+    
     # Setup model paths
     checkpoint_dir = project_root / "checkpoints"
     gpt_dir = checkpoint_dir / "shakespeare_64x4"
     data_dir = project_root / "data"
-
-    # Hacky fix for loading the model
-    if sae_variant == "mlp-topk":
-        mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
-    elif sae_variant == "jsae":
-        mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
-    elif sae_variant == "staircase":
-        mlp_dir = checkpoint_dir / f"{sae_variant}-mlpblock.shk_64x4"
-    else:
-        mlp_dir = checkpoint_dir / f"jblock.shk_64x4-sparse-{sae_variant}"
+    mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
 
     # Load GPT model
     print("Loading GPT model...")
@@ -101,8 +85,6 @@ def main():
     with open(meta_path, "r") as f:
         meta = json.load(f)
     config = SAEConfig(**meta)
-    
-    # config.gpt_config = gpt.config
 
     # Create a model profile (will only work for zero ablation)
     model_profile = ModelProfile()
@@ -131,16 +113,15 @@ def main():
     usable_data = val_tensor[:num_chunks * sequence_length]
     reshaped_val_tensor = usable_data.reshape(num_chunks, sequence_length)
     input_ids = reshaped_val_tensor[:num_prompts, :].to(device)  # Also move to the correct device
-
+    
     print(f"Computing upstream & downstream magnitudes (full circuit)...")
-    keys = [f'{upstream_layer_num}_residmid', f'{upstream_layer_num}_residpost']
-    with model.use_saes(activations_to_patch = keys) as encoder_outputs:
-        _ = model(input_ids)
-        upstream_magnitudes = encoder_outputs[keys[0]].feature_magnitudes
-        downstream_magnitudes_full_circuit = encoder_outputs[keys[1]].feature_magnitudes
-
+    with torch.no_grad():    
+        with model.use_saes(activations_to_patch=[upstream_layer_num, upstream_layer_num + 1]) as encoder_outputs:
+            _ = model(input_ids)
+            upstream_magnitudes = encoder_outputs[f'{upstream_layer_num}_act'].feature_magnitudes
+            downstream_magnitudes_full_circuit = encoder_outputs[f'{upstream_layer_num + 1}_act'].feature_magnitudes
+    
     # Create edges
-    # STILL CORRECT?
     num_upstream_features = model.config.n_features[upstream_layer_num]
     num_downstream_features = model.config.n_features[upstream_layer_num + 1]
     
@@ -154,16 +135,11 @@ def main():
         edge_arr = all_edges[:num_edges]
 
     elif edge_selection == "gradient":
-        if sae_variant == "staircase":
-            gradient_dir = project_root / f"attributions/data/staircase-mlpblock.shk_64x4.safetensors"
-        else:
-            gradient_dir = project_root / f"attributions/data/jblock.shk_64x4-sparse-{sae_variant}"
-        
+        gradient_dir = project_root / f"attributions/data/{sae_variant}.shakespeare_64x4"
         tensors = load_file(gradient_dir)
-        all_edges, _ = get_attribution_rankings(tensors[f'MLP_BLOCK_{upstream_layer_num}'])
+        all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
         edge_arr = all_edges[:num_edges]
-
-
+    
     # Create TokenlessEdge objects
     edges = create_tokenless_edges_from_array(edge_arr, upstream_layer_num)
     
@@ -171,16 +147,12 @@ def main():
     print(f"Computing downstream magnitudes from {len(edges)} edges...")
     start_time = time.time()
     
-    print(upstream_magnitudes.shape)
-    print(downstream_magnitudes_full_circuit.shape)
     if num_edges == num_upstream_features * num_downstream_features:
         # Use the full circuit magnitudes
         print(f"Using full circuit magnitudes...")
         downstream_magnitudes = downstream_magnitudes_full_circuit
-
     else:
-        # Compute downstream magnitudes from edges
-        downstream_magnitudes = compute_batched_downstream_magnitudes_from_edges_resid(
+        downstream_magnitudes = compute_batched_downstream_magnitudes_from_edges(
             model=model,
             ablator=ablator,
             edges=edges,
@@ -190,28 +162,19 @@ def main():
         )
 
     # Compute logits subcircuit
-    x_reconstructed = model.saes[f'{upstream_layer_num}_residpost'].decode(downstream_magnitudes) 
-    # predicted_logits = model.gpt.forward_with_patched_activations_mlp(
-    #     x_reconstructed, resid_mid, layer_idx, hook_loc
-    # )   # Shape: (num_batches, T, V)
+    x_reconstructed = model.saes[f'{upstream_layer_num + 1}_act'].decode(downstream_magnitudes) 
     predicted_logits = model.gpt.forward_with_patched_activations(
-        x_reconstructed, upstream_layer_num + 1
-    )   # Shape: (num_batches, T, V)
-    print(predicted_logits.shape)
+        x_reconstructed, layer_idx=upstream_layer_num + 1
+    )  # Shape: (num_batches, T, V)
 
     # Compute logits full circuit
-    x_reconstructed_full_circuit = model.saes[f'{upstream_layer_num}_residpost'].decode(downstream_magnitudes_full_circuit) 
-    # predicted_logits_full_circuit = model.gpt.forward_with_patched_activations_mlp(
-    #     x_reconstructed_full_circuit, resid_mid, layer_idx, hook_loc
-    # )  # Shape: (num_batches, T, V)
+    x_reconstructed_full_circuit = model.saes[f'{upstream_layer_num + 1}_act'].decode(downstream_magnitudes_full_circuit) 
     predicted_logits_full_circuit = model.gpt.forward_with_patched_activations(
-        x_reconstructed_full_circuit, upstream_layer_num + 1
+        x_reconstructed_full_circuit, layer_idx=upstream_layer_num + 1
     )  # Shape: (num_batches, T, V)
-    print(predicted_logits_full_circuit.shape)
 
     # Compute logits full model
     predicted_logits_full_model = model(input_ids, targets=None, is_eval=True).logits
-
 
     # Compute KL divergence between full and subcircuit logits
     probs_full_model = F.softmax(predicted_logits_full_model, dim=-1)
@@ -231,7 +194,7 @@ def main():
     # Compute the time taken for the computation
     execution_time = time.time() - start_time
     print(f"Computation completed in {execution_time:.2f} seconds")
-
+    
     # Create experiment output
     experiment_params = ExperimentParams(
         task="magnitudes",
@@ -264,7 +227,7 @@ def main():
  
     # Save results
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    output_dir = project_root / f"data/{run_idx}"
+    output_dir = project_root / f"ablation/data/{run_idx}"
     output_path = output_dir / f"{experiment_output.experiment_id}_{timestamp}.safetensors"
     if not output_dir.exists():
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -279,6 +242,7 @@ def main():
     print(f"- Downstream magnitudes shape: {downstream_magnitudes.shape}")
     print(f"- Downstream logits shape: {predicted_logits.shape}")
     print(f"- Results saved to: {output_path}")
+
 
 if __name__ == "__main__":
     main()

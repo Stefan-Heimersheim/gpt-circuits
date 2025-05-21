@@ -4,14 +4,21 @@ NUM_PROMPTS=50
 SEED=125
 
 # Parameters to loop over
-RUN_INDEX="residmid-residpost_50P_v1"
+# RUN_INDEX="residpre-residpost_50P_v1"
+# EDGE_SELECTIONS=("gradient")
+# UPSTREAM_LAYERS=(1 2 3 0)
+# SAE_VARIANTS=("topk-staircase-share" "topk")
+# EDGE_SET=(1      2      4      5      7     11     16     22     32     45
+#      63     90    127    181    256    362    512    724   1024   1448
+#    2048   2896   4095   5792   8191  11585  16383  23170  32768  46340
+#   65536  92681 131072 185363 262144)
+
+RUN_INDEX="testing_trans_block"
 EDGE_SELECTIONS=("gradient")
 UPSTREAM_LAYERS=(1 2 3 0)
-SAE_VARIANTS=("staircase" "0.0ep00")
-EDGE_SET=(1      2      4      5      7     11     16     22     32     45
-     63     90    127    181    256    362    512    724   1024   1448
-   2048   2896   4095   5792   8191  11585  16383  23170  32768  46340
-  65536  92681 131072 185363 262144)
+SAE_VARIANTS=("topk-staircase-share" "topk")
+EDGE_SET=(100 1000)
+
 
 # Create log directory if it doesn't exist
 LOG_DIR="ablation/logs"
@@ -47,7 +54,7 @@ do
         echo "Running experiment with SAE variant $SAE_VARIANT, layer $CURRENT_LAYER, $NUM_EDGES edges, $EDGE_SELECTION strategy..."
         
         # Run the Python script with the specified parameters
-        python ablation/magnitudes_logits_from_edges_resid.py \
+        python ablation/ablation_magnitudes_trans_block.py \
           --num-edges $NUM_EDGES \
           --upstream-layer-num $CURRENT_LAYER \
           --num-samples $NUM_SAMPLES \
