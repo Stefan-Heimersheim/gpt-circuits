@@ -1,0 +1,3 @@
+#!/bin/bash
+python -m attributions.compute_attributions --load_from=checkpoints/ff_block_topk --save_to=attributions/data --data_dir=data/shakespeare --save_name=ff_block_topk --num_batches=24 --batch_size=24 --steps=4 --attribution_method=ig
+python -m attributions.compute_attributions --load_from=checkpoints/ff_block_staircase --save_to=attributions/data --data_dir=data/shakespeare --save_name=ff_block_staircase --num_batches=24 --batch_size=24 --steps=4 --attribution_method=ig
