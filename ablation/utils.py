@@ -511,3 +511,117 @@ def extract_compound_ce_loss_increase(logs, target_step=20000):
             return l1_values
     
 
+def prepare_plot_data(kl_values_list, feature_counts_list, method_labels, layers, token_idx=None):
+        """
+        Prepare data for plotting by calculating statistics (means and confidence intervals).
+        
+        Args:
+            kl_values_list: List of KL divergence values
+            feature_counts_list: List of feature counts
+            method_labels: Labels for different methods
+            layers: List of layer indices
+            token_idx: Optional specific token index to average over
+            
+        Returns:
+            mean_values, yerr_lower_values, yerr_upper_values: Statistics for plotting
+        """
+        mean_values = []
+        yerr_lower_values = []
+        yerr_upper_values = []
+
+        # Calculate statistics
+        for layer_idx in range(len(layers)):
+            layer_means = []
+            layer_yerr_lower = []
+            layer_yerr_upper = []
+            
+            for method_idx in range(len(method_labels)):
+                method_means = []
+                method_yerr_lower = []
+                method_yerr_upper = []
+                
+                for edge_idx in range(len(feature_counts_list[method_idx])):
+                    # If token_idx is not None, average over all token positions
+                    if token_idx is None:
+                        # Flatten the tensor to average over all dimensions
+                        tensor = kl_values_list[method_idx][layer_idx][edge_idx]
+                        flat_data = tensor.flatten()
+                        if isinstance(flat_data, torch.Tensor):
+                            flat_data = flat_data.numpy()
+                    else:
+                        # Flatten the tensor to average over specific token positions
+                        tensor = kl_values_list[method_idx][layer_idx][edge_idx][:, token_idx]
+                        flat_data = tensor.flatten()
+                        if isinstance(flat_data, torch.Tensor):
+                            flat_data = flat_data.numpy()
+                    
+                    # Compute mean and confidence interval
+                    mean_value = np.mean(flat_data)
+                    lower_ci, upper_ci = bootstrap_ci(flat_data)
+                    yerr_lower = mean_value - lower_ci
+                    yerr_upper = upper_ci - mean_value
+                    
+                    # Store values
+                    method_means.append(mean_value)
+                    method_yerr_lower.append(yerr_lower)
+                    method_yerr_upper.append(yerr_upper)
+                
+                layer_means.append(method_means)
+                layer_yerr_lower.append(method_yerr_lower)
+                layer_yerr_upper.append(method_yerr_upper)
+            
+            mean_values.append(layer_means)
+            yerr_lower_values.append(layer_yerr_lower)
+            yerr_upper_values.append(layer_yerr_upper)
+        
+        return mean_values, yerr_lower_values, yerr_upper_values
+
+
+def compute_auc_values(feature_counts_list, mean_values, yerr_lower_values, yerr_upper_values, method_labels, layers):
+        """
+        Compute area under the curve and associated errors for each layer and method.
+        
+        Args:
+            feature_counts_list: List of x values for each method
+            mean_values: Mean y values for each layer and method
+            yerr_lower_values: Lower error bounds for each layer and method
+            yerr_upper_values: Upper error bounds for each layer and method
+            method_labels: Labels for each method
+            layers: List of layer indices
+            
+        Returns:
+            auc_values: AUC values for each layer and method
+            auc_errors: Error estimates for AUC values
+        """
+        auc_values = []
+        auc_errors = []
+
+        for layer_idx in range(len(layers)):
+            layer_auc = []
+            layer_auc_error = []
+            
+            for method_idx in range(len(method_labels)):
+                # Get x and y values for this layer and method
+                x_values = feature_counts_list[method_idx]
+                y_values = mean_values[layer_idx][method_idx]
+                
+                # Calculate AUC using trapezoidal rule
+                auc = np.trapz(y_values, x_values)
+                
+                # Calculate AUC error by propagating the errors
+                lower_values = [y - yerr for y, yerr in zip(y_values, yerr_lower_values[layer_idx][method_idx])]
+                upper_values = [y + yerr for y, yerr in zip(y_values, yerr_upper_values[layer_idx][method_idx])]
+                
+                auc_lower = np.trapz(lower_values, x_values)
+                auc_upper = np.trapz(upper_values, x_values)
+                
+                # Error as half the range between upper and lower bounds
+                auc_error = (auc_upper - auc_lower) / 2
+                
+                layer_auc.append(auc)
+                layer_auc_error.append(auc_error)
+            
+            auc_values.append(layer_auc)
+            auc_errors.append(layer_auc_error)
+        
+        return auc_values, auc_errors
