@@ -25,7 +25,7 @@ from models.mlpsparsified import MLPSparsifiedGPT
 from data.tokenizers import ASCIITokenizer
 from demo.convert_to_tl import convert_gpt_to_transformer_lens
 from demo.convert_to_tl import run_tests as run_tl_tests
-from xavier.utils import create_tokenless_edges_from_array, get_attribution_rankings
+from ablation.utils import create_tokenless_edges_from_array, get_attribution_rankings
 
 from circuits import Circuit
 from circuits.search.divergence import (
@@ -35,8 +35,8 @@ from circuits.search.divergence import (
 from circuits.features.cache import ModelCache
 from circuits.features.profiles import ModelProfile
 from circuits.search.ablation import ResampleAblator
-from circuits.search.edges import compute_batched_downstream_magnitudes_from_edges_mlp
-from xavier.experiments import ExperimentParams, ExperimentResults, ExperimentOutput
+from circuits.search.edges import compute_batched_downstream_magnitudes_from_edges_mlp, compute_batched_downstream_magnitudes_from_edges_resid
+from ablation import ExperimentParams, ExperimentResults, ExperimentOutput
 
 @torch.no_grad()
 def main():
@@ -85,8 +85,10 @@ def main():
         mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
     elif sae_variant == "jsae":
         mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
+    elif sae_variant == "staircase":
+        mlp_dir = checkpoint_dir / f"{sae_variant}-mlpblock.shk_64x4"
     else:
-        mlp_dir = checkpoint_dir / f"jsae.shk_64x4-sparse-{sae_variant}-steps-20k"
+        mlp_dir = checkpoint_dir / f"jblock.shk_64x4-sparse-{sae_variant}"
 
     # Load GPT model
     print("Loading GPT model...")
@@ -131,7 +133,7 @@ def main():
     input_ids = reshaped_val_tensor[:num_prompts, :].to(device)  # Also move to the correct device
 
     print(f"Computing upstream & downstream magnitudes (full circuit)...")
-    keys = [f'{upstream_layer_num}_mlpin', f'{upstream_layer_num}_mlpout']
+    keys = [f'{upstream_layer_num}_residmid', f'{upstream_layer_num}_residpost']
     with model.use_saes(activations_to_patch = keys) as encoder_outputs:
         _ = model(input_ids)
         upstream_magnitudes = encoder_outputs[keys[0]].feature_magnitudes
@@ -152,10 +154,15 @@ def main():
         edge_arr = all_edges[:num_edges]
 
     elif edge_selection == "gradient":
-        gradient_dir = project_root / f"SPAR-attributions/jsae.shakespeare_64x4-sparsity-{sae_variant}-20k.safetensors"
+        if sae_variant == "staircase":
+            gradient_dir = project_root / f"attributions/data/staircase-mlpblock.shk_64x4.safetensors"
+        else:
+            gradient_dir = project_root / f"attributions/data/jblock.shk_64x4-sparse-{sae_variant}"
+        
         tensors = load_file(gradient_dir)
-        all_edges, _ = get_attribution_rankings(tensors[f'{2*upstream_layer_num}-{2*upstream_layer_num + 1}'])
+        all_edges, _ = get_attribution_rankings(tensors[f'MLP_BLOCK_{upstream_layer_num}'])
         edge_arr = all_edges[:num_edges]
+
 
     # Create TokenlessEdge objects
     edges = create_tokenless_edges_from_array(edge_arr, upstream_layer_num)
@@ -171,39 +178,9 @@ def main():
         print(f"Using full circuit magnitudes...")
         downstream_magnitudes = downstream_magnitudes_full_circuit
 
-    elif num_edges == 0:
-        # Create a dummy circuit for the ablator
-        empty_circuit = Circuit(nodes=frozenset()) # Dummy circuit not used for downstream computation
-        
-        downstream_magnitudes_list = []
-        for i in range(num_prompts):
-            dummy_downstream = compute_downstream_magnitudes_mlp(  # Shape: (num_samples, T, F)
-                model,
-                upstream_layer_num,
-                {empty_circuit: upstream_magnitudes[i].unsqueeze(0)}
-            )
-            dummy_downstream_magnitudes = dummy_downstream[empty_circuit].squeeze(0)
-            print(dummy_downstream_magnitudes.shape)
-
-            # Initialise the result tensor as the patched downstream magnitudes
-            patched_downstream_magnitudes = patch_feature_magnitudes(  # Shape: (num_samples, T, F)
-                ablator,
-                upstream_layer_num + 1,
-                target_token_idx,
-                [empty_circuit],
-                dummy_downstream_magnitudes,
-                num_samples=num_samples,
-            )
-
-            # Average over num_samples
-            averaged_downstream_magnitudes = patched_downstream_magnitudes[empty_circuit][0].mean(dim=0)
-            downstream_magnitudes_list.append(averaged_downstream_magnitudes)
-            
-        downstream_magnitudes = torch.stack(downstream_magnitudes_list, dim=0)
-
     else:
         # Compute downstream magnitudes from edges
-        downstream_magnitudes = compute_batched_downstream_magnitudes_from_edges_mlp(
+        downstream_magnitudes = compute_batched_downstream_magnitudes_from_edges_resid(
             model=model,
             ablator=ablator,
             edges=edges,
@@ -212,34 +189,24 @@ def main():
             num_samples=num_samples
         )
 
-    # Prepare data to compute logits
-    with model.record_activations() as activations:
-            with model.use_saes() as encoder_outputs:
-                _, _ = model.gpt(input_ids, targets=None)
-    
-    layer_idx, hook_loc = model.split_sae_key(f'{upstream_layer_num}_mlpout')
-    resid_mid = activations[f'{layer_idx}_residmid']
-
-    assert upstream_layer_num == layer_idx, f"Upstream layer number {upstream_layer_num} does not match layer index {layer_idx}"
-
     # Compute logits subcircuit
-    x_reconstructed = model.saes[f'{upstream_layer_num}_mlpout'].decode(downstream_magnitudes) 
-    predicted_logits = model.gpt.forward_with_patched_activations_mlp(
-        x_reconstructed, resid_mid, layer_idx, hook_loc
-    )   # Shape: (num_batches, T, V)
-    # predicted_logits = model.gpt.forward_with_patched_activations(
-    #     x_reconstructed, layer_idx
+    x_reconstructed = model.saes[f'{upstream_layer_num}_residpost'].decode(downstream_magnitudes) 
+    # predicted_logits = model.gpt.forward_with_patched_activations_mlp(
+    #     x_reconstructed, resid_mid, layer_idx, hook_loc
     # )   # Shape: (num_batches, T, V)
+    predicted_logits = model.gpt.forward_with_patched_activations(
+        x_reconstructed, upstream_layer_num + 1
+    )   # Shape: (num_batches, T, V)
     print(predicted_logits.shape)
 
     # Compute logits full circuit
-    x_reconstructed_full_circuit = model.saes[f'{upstream_layer_num}_mlpout'].decode(downstream_magnitudes_full_circuit) 
-    predicted_logits_full_circuit = model.gpt.forward_with_patched_activations_mlp(
-        x_reconstructed_full_circuit, resid_mid, layer_idx, hook_loc
-    )  # Shape: (num_batches, T, V)
-    # predicted_logits_full_circuit = model.gpt.forward_with_patched_activations(
-    #     x_reconstructed_full_circuit, layer_idx
+    x_reconstructed_full_circuit = model.saes[f'{upstream_layer_num}_residpost'].decode(downstream_magnitudes_full_circuit) 
+    # predicted_logits_full_circuit = model.gpt.forward_with_patched_activations_mlp(
+    #     x_reconstructed_full_circuit, resid_mid, layer_idx, hook_loc
     # )  # Shape: (num_batches, T, V)
+    predicted_logits_full_circuit = model.gpt.forward_with_patched_activations(
+        x_reconstructed_full_circuit, upstream_layer_num + 1
+    )  # Shape: (num_batches, T, V)
     print(predicted_logits_full_circuit.shape)
 
     # Compute logits full model
@@ -297,7 +264,7 @@ def main():
  
     # Save results
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    output_dir = project_root / f"xavier/experiments/data/{run_idx}"
+    output_dir = project_root / f"data/{run_idx}"
     output_path = output_dir / f"{experiment_output.experiment_id}_{timestamp}.safetensors"
     if not output_dir.exists():
             output_dir.mkdir(parents=True, exist_ok=True)

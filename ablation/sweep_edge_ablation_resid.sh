@@ -1,20 +1,20 @@
-#!/bin/bash
-# filepath: xavier/experiments/run_magnitudes_experiments.sh
-
 # Default parameters
 NUM_SAMPLES=2
-NUM_PROMPTS=5
+NUM_PROMPTS=50
 SEED=125
 
 # Parameters to loop over
-EDGE_SELECTIONS=("outer")
-UPSTREAM_LAYERS=(3)
-EDGE_SET=(10 20 30 40 50 60 70 80 90 100 110
-        120 130 140 150 160 170 180 190 200)
-SAE_VARIANTS=("jumprelu" "regularized" "top5" "top20" "topk")
+RUN_INDEX="residmid-residpost_50P_v1"
+EDGE_SELECTIONS=("gradient")
+UPSTREAM_LAYERS=(1 2 3 0)
+SAE_VARIANTS=("staircase" "0.0ep00")
+EDGE_SET=(1      2      4      5      7     11     16     22     32     45
+     63     90    127    181    256    362    512    724   1024   1448
+   2048   2896   4095   5792   8191  11585  16383  23170  32768  46340
+  65536  92681 131072 185363 262144)
 
 # Create log directory if it doesn't exist
-LOG_DIR="xavier/experiments/logs"
+LOG_DIR="ablation/logs"
 mkdir -p $LOG_DIR
 
 # Generate timestamp for log files
@@ -28,6 +28,7 @@ echo "- SAE variants: ${SAE_VARIANTS[*]}"
 echo "- Random seed: $SEED"
 echo ""
 
+# Data generation
 for SAE_VARIANT in "${SAE_VARIANTS[@]}"
 do
   echo "Running experiments with SAE variant: $SAE_VARIANT"
@@ -46,25 +47,24 @@ do
         echo "Running experiment with SAE variant $SAE_VARIANT, layer $CURRENT_LAYER, $NUM_EDGES edges, $EDGE_SELECTION strategy..."
         
         # Run the Python script with the specified parameters
-        python xavier/experiments/magnitudes_outer_batched.py \
+        python ablation/magnitudes_logits_from_edges_resid.py \
           --num-edges $NUM_EDGES \
           --upstream-layer-num $CURRENT_LAYER \
           --num-samples $NUM_SAMPLES \
           --num-prompts $NUM_PROMPTS \
           --edge-selection $EDGE_SELECTION \
           --sae-variant $SAE_VARIANT \
+          --run-index $RUN_INDEX \
           --seed $SEED \
           2>&1 | tee "${LOG_DIR}/sae_${SAE_VARIANT}_layer${CURRENT_LAYER}_${EDGE_SELECTION}_edges_${NUM_EDGES}_${TIMESTAMP}.log"
         
         echo "Completed experiment with SAE variant $SAE_VARIANT, layer $CURRENT_LAYER, $NUM_EDGES edges, $EDGE_SELECTION strategy"
         echo ""
-        
-        # Optional: add a small delay between runs
-        sleep 1
+
       done
     done
   done
 done
 
-echo "All experiments completed!"
-echo "Log files are available in: $LOG_DIR"
+
+echo "All data generation completed!"
