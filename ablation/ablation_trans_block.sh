@@ -13,13 +13,6 @@ EDGE_SET=(1      2      4      5      7     11     16     22     32     45
    2048   2896   4095   5792   8191  11585  16383  23170  32768  46340
   65536  92681 131072 185363 262144)
 
-# RUN_INDEX="testing_trans_block"
-# EDGE_SELECTIONS=("gradient")
-# UPSTREAM_LAYERS=(1 2 3 0)
-# SAE_VARIANTS=("topk" "staircase")
-# EDGE_SET=(10 20)
-
-
 # Create log directory if it doesn't exist
 LOG_DIR="ablation/logs"
 mkdir -p $LOG_DIR
@@ -75,3 +68,7 @@ done
 
 
 echo "All data generation completed!"
+
+python ablation/plot_trans_block.py
+
+echo "Plotting completed!"

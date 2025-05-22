@@ -13,12 +13,6 @@ EDGE_SET=(1      2      4      5      7     11     16     22     32     45
    2048   2896   4095   5792   8191  11585  16383  23170  32768  46340
   65536  92681 131072 185363 262144)
 
-# RUN_INDEX="testing_FF_block"
-# EDGE_SELECTIONS=("gradient")
-# UPSTREAM_LAYERS=(0 1 2 3)
-# SAE_VARIANTS=("staircase" "topk")
-# EDGE_SET=(100 1000)
-
 # Create log directory if it doesn't exist
 LOG_DIR="ablation/logs"
 mkdir -p $LOG_DIR
@@ -74,3 +68,7 @@ done
 
 
 echo "All data generation completed!"
+
+python ablation/plot_ff_block.py
+
+echo "Plotting completed!"
