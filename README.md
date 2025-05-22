@@ -76,7 +76,7 @@ For SAEs that come in pairs, the keys are:
 OR
 `0_mlpin`, `0_mlpout`, `1_mlpin`, `1_mlpout`, ... `3_mlpin`, `3_mlpout`
 
-### Replicating results 
+## Replicating results 
 
 To replicate the results run the following shell scripts in order:
 
