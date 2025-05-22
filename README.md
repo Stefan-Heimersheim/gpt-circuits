@@ -83,9 +83,9 @@ To replicate the results run the following shell scripts in order:
 ```
 # 1. Training scripts
 
-./train_FF_layer.sh
-./train_FF_block.sh
-./train_trans_block.sh
+./train_models.sh
+
+Or download the pre-trained models from huggingface: [LINK REDACTED]
 
 # 2. Attribution scripts
 
