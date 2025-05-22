@@ -68,7 +68,7 @@ function Intro() {
       </figure>
       <p>
         This research builds upon a{" "}
-        <a href="https://peterlai.github.io/gpt-mri/" target="_blank" rel="noreferrer">
+        <a href="https://redacted.github.io/redacted/" target="_blank" rel="noreferrer">
           previous version
         </a>{" "}
         of this project in which we extract circuits from 4 &amp; 6 layer character-based GPT-2
