@@ -93,7 +93,7 @@ To replicate the results run the following shell scripts in order:
 ./attributions_FF_block.sh
 ./attributions_trans_block.sh
 
-# 3. Ablation 
+# 3. Ablation scripts
 
 ./ablation/ablation_FF_layer.sh
 ./ablation/ablation_FF_block.sh

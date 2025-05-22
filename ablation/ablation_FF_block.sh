@@ -47,7 +47,7 @@ do
         echo "Running experiment with SAE variant $SAE_VARIANT, layer $CURRENT_LAYER, $NUM_EDGES edges, $EDGE_SELECTION strategy..."
         
         # Run the Python script with the specified parameters
-        python ablation/ablation_magnitudes_ff_block.py \
+        python ablation/ablation_magnitudes_FF_block.py \
           --num-edges $NUM_EDGES \
           --upstream-layer-num $CURRENT_LAYER \
           --num-samples $NUM_SAMPLES \
@@ -69,6 +69,6 @@ done
 
 echo "All data generation completed!"
 
-python ablation/plot_ff_block.py
+python ablation/plot_FF_block.py
 
 echo "Plotting completed!"
