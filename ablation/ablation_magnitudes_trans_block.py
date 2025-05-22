@@ -37,10 +37,8 @@ def main():
     parser.add_argument("--upstream-layer-num", type=int, default=0, help="Upstream layer index")
     parser.add_argument("--num-samples", type=int, default=2, help="Number of samples for patching")
     parser.add_argument("--num-prompts", type=int, default=1, help="Number of prompts to use from validation data")
-    parser.add_argument("--edge-selection", type=str, default="random", 
-                        choices=["random", "gradient", "gradient_reversed", "manual_scaled", "manual_pos_scaled", "manual_unscaled"], help="Edge selection strategy")
-    parser.add_argument("--sae-variant", type=str, default="standard", 
-                        choices=["topk-staircase-share", "standard", "top5", "topk", "top20"], help="Type of SAE")
+    parser.add_argument("--edge-selection", type=str, default="random", choices=["random", "gradient"], help="Edge selection strategy")
+    parser.add_argument("--sae-variant", type=str, default="standard", choices=["topk", "staircase"], help="Type of SAE")
     parser.add_argument("--run-index", type=str, default="testing", help="Index of the run")
     parser.add_argument("--seed", type=int, default=125, help="Random seed")
     args = parser.parse_args()
@@ -69,10 +67,8 @@ def main():
     print(f"Using device: {device}")
     
     # Setup model paths
-    checkpoint_dir = project_root / "checkpoints"
-    gpt_dir = checkpoint_dir / "shakespeare_64x4"
+    mlp_dir = project_root / "checkpoints" / f"trans_block_{sae_variant}"
     data_dir = project_root / "data"
-    mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
 
     # Load GPT model
     print("Loading GPT model...")
@@ -135,7 +131,7 @@ def main():
         edge_arr = all_edges[:num_edges]
 
     elif edge_selection == "gradient":
-        gradient_dir = project_root / f"attributions/data/{sae_variant}.shakespeare_64x4"
+        gradient_dir = project_root / f"attributions/data/trans_block_{sae_variant}.safetensors"
         tensors = load_file(gradient_dir)
         all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
         edge_arr = all_edges[:num_edges]

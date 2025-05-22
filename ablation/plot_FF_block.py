@@ -16,8 +16,8 @@ def main():
     
     # DATA LOADING
     exp_output = 'kl_divergence_full_model'
-    data_dir = Path.cwd() / 'ablation' / 'data' / 'residmid-residpost_50P_v1'
-    method_labels = ["0.0ep00", "staircase"]
+    data_dir = Path.cwd() / 'ablation' / 'data' / 'ff_block_50P'
+    method_labels = ["topk", "staircase"]
     edge_sort = "gradient"
     layers = [0,1,2,3]
 
@@ -118,7 +118,7 @@ def main():
         plt.legend(loc='lower left', fontsize=18)
         plt.grid(True)
 
-        filename = Path.cwd() / 'ablation' / 'plots' / f'FF_BLOCK_{layers[layer_idx]}_test.svg'
+        filename = Path.cwd() / 'ablation' / 'plots' / f'FF_BLOCK_{layers[layer_idx]}.svg'
         plt.savefig(filename, format="svg", bbox_inches='tight')
 
 if __name__ == "__main__":

@@ -47,11 +47,8 @@ def main():
     parser.add_argument("--upstream-layer-num", type=int, default=0, help="Upstream layer index")
     parser.add_argument("--num-samples", type=int, default=2, help="Number of samples for patching")
     parser.add_argument("--num-prompts", type=int, default=1, help="Number of prompts to use from validation data")
-    parser.add_argument("--edge-selection", type=str, default="random", 
-                        choices=["random", "gradient", "gradient_reversed", "manual_scaled", "manual_pos_scaled", "manual_unscaled"], help="Edge selection strategy")
-    parser.add_argument("--sae-variant", type=str, default="standard", help="Type of SAE")
-    #parser.add_argument("--sae-variant", type=str, default="standard", 
-                        #choices=["standard", "topk", "topk-x40", "topk-staircase", "jumprelu", "regularized", "top5", "top20", "topk", "mlp-topk", "jsae", "1e0", "1e-1", "1e-2", "1e-3", "2e-1", "2e-2", "5e-1", "5e-2", "5e-3"], help="Type of SAE")
+    parser.add_argument("--edge-selection", type=str, default="random", choices=["random", "gradient"], help="Edge selection strategy")
+    parser.add_argument("--sae-variant", type=str, default="standard", choices=["topk", "staircase"], help="Type of SAE")
     parser.add_argument("--run-index", type=str, default="testing", help="Index of the run")
     parser.add_argument("--seed", type=int, default=125, help="Random seed")
     args = parser.parse_args()
@@ -76,19 +73,8 @@ def main():
     print(f"Using device: {device}")
 
     # Setup model paths
-    checkpoint_dir = project_root / "checkpoints"
-    gpt_dir = checkpoint_dir / "shakespeare_64x4"
+    mlp_dir = project_root / "checkpoints" / f"ff_block_{sae_variant}"
     data_dir = project_root / "data"
-
-    # Hacky fix for loading the model
-    if sae_variant == "mlp-topk":
-        mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
-    elif sae_variant == "jsae":
-        mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
-    elif sae_variant == "staircase":
-        mlp_dir = checkpoint_dir / f"{sae_variant}-mlpblock.shk_64x4"
-    else:
-        mlp_dir = checkpoint_dir / f"jblock.shk_64x4-sparse-{sae_variant}"
 
     # Load GPT model
     print("Loading GPT model...")
@@ -130,7 +116,7 @@ def main():
     num_chunks = val_tensor.shape[0] // sequence_length
     usable_data = val_tensor[:num_chunks * sequence_length]
     reshaped_val_tensor = usable_data.reshape(num_chunks, sequence_length)
-    input_ids = reshaped_val_tensor[:num_prompts, :].to(device)  # Also move to the correct device
+    input_ids = reshaped_val_tensor[:num_prompts, :].to(device) 
 
     print(f"Computing upstream & downstream magnitudes (full circuit)...")
     keys = [f'{upstream_layer_num}_residmid', f'{upstream_layer_num}_residpost']
@@ -140,7 +126,6 @@ def main():
         downstream_magnitudes_full_circuit = encoder_outputs[keys[1]].feature_magnitudes
 
     # Create edges
-    # STILL CORRECT?
     num_upstream_features = model.config.n_features[upstream_layer_num]
     num_downstream_features = model.config.n_features[upstream_layer_num + 1]
     
@@ -154,11 +139,7 @@ def main():
         edge_arr = all_edges[:num_edges]
 
     elif edge_selection == "gradient":
-        if sae_variant == "staircase":
-            gradient_dir = project_root / f"attributions/data/staircase-mlpblock.shk_64x4.safetensors"
-        else:
-            gradient_dir = project_root / f"attributions/data/jblock.shk_64x4-sparse-{sae_variant}"
-        
+        gradient_dir = project_root / f"attributions/data/ff_block_{sae_variant}.safetensors"
         tensors = load_file(gradient_dir)
         all_edges, _ = get_attribution_rankings(tensors[f'MLP_BLOCK_{upstream_layer_num}'])
         edge_arr = all_edges[:num_edges]
@@ -191,9 +172,6 @@ def main():
 
     # Compute logits subcircuit
     x_reconstructed = model.saes[f'{upstream_layer_num}_residpost'].decode(downstream_magnitudes) 
-    # predicted_logits = model.gpt.forward_with_patched_activations_mlp(
-    #     x_reconstructed, resid_mid, layer_idx, hook_loc
-    # )   # Shape: (num_batches, T, V)
     predicted_logits = model.gpt.forward_with_patched_activations(
         x_reconstructed, upstream_layer_num + 1
     )   # Shape: (num_batches, T, V)
@@ -201,9 +179,6 @@ def main():
 
     # Compute logits full circuit
     x_reconstructed_full_circuit = model.saes[f'{upstream_layer_num}_residpost'].decode(downstream_magnitudes_full_circuit) 
-    # predicted_logits_full_circuit = model.gpt.forward_with_patched_activations_mlp(
-    #     x_reconstructed_full_circuit, resid_mid, layer_idx, hook_loc
-    # )  # Shape: (num_batches, T, V)
     predicted_logits_full_circuit = model.gpt.forward_with_patched_activations(
         x_reconstructed_full_circuit, upstream_layer_num + 1
     )  # Shape: (num_batches, T, V)
@@ -262,6 +237,7 @@ def main():
         results=experiment_results
     )
  
+    # CHECK THIS 
     # Save results
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
     output_dir = project_root / f"ablation/data/{run_idx}"

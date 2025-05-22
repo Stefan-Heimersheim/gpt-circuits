@@ -16,7 +16,7 @@ def main():
     
     # DATA LOADING
     exp_output = 'kl_divergence_full_model'
-    data_dir = Path.cwd() / 'ablation' / 'data' / 'mlpin-mlpout_50P_v1'
+    data_dir = Path.cwd() / 'ablation' / 'data' / 'ff_layer_50P'
     method_labels = ["0.0ep00", "1.0e-03", "1.2e-03", "1.5e-03", "1.8e-03", "2.2e-03", "2.7e-03", "3.3e-03", "3.9e-03", "4.7e-03", "5.6e-03", "6.8e-03", "1.0e-02"]
     edge_sort = "gradient"
     layers = [0,1,2,3]
@@ -109,7 +109,7 @@ def main():
         plt.legend(loc='lower left', fontsize=18)
         plt.grid(True)
 
-        filename = Path.cwd() / 'ablation' / 'plots' / f'FF_LAYER_{layers[layer_idx]}_test.svg'
+        filename = Path.cwd() / 'ablation' / 'plots' / f'FF_LAYER_{layers[layer_idx]}.svg'
         plt.savefig(filename, format="svg", bbox_inches='tight')
 
 if __name__ == "__main__":

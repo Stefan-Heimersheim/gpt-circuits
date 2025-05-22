@@ -4,20 +4,20 @@ NUM_PROMPTS=50
 SEED=125
 
 # Parameters to loop over
-# RUN_INDEX="residpre-residpost_50P_v1"
-# EDGE_SELECTIONS=("gradient")
-# UPSTREAM_LAYERS=(1 2 3 0)
-# SAE_VARIANTS=("topk-staircase-share" "topk")
-# EDGE_SET=(1      2      4      5      7     11     16     22     32     45
-#      63     90    127    181    256    362    512    724   1024   1448
-#    2048   2896   4095   5792   8191  11585  16383  23170  32768  46340
-#   65536  92681 131072 185363 262144)
-
-RUN_INDEX="testing_trans_block"
+RUN_INDEX="trans_block_test_50P_v1"
 EDGE_SELECTIONS=("gradient")
 UPSTREAM_LAYERS=(1 2 3 0)
-SAE_VARIANTS=("topk-staircase-share" "topk")
-EDGE_SET=(100 1000)
+SAE_VARIANTS=("topk" "staircase")
+EDGE_SET=(1      2      4      5      7     11     16     22     32     45
+     63     90    127    181    256    362    512    724   1024   1448
+   2048   2896   4095   5792   8191  11585  16383  23170  32768  46340
+  65536  92681 131072 185363 262144)
+
+# RUN_INDEX="testing_trans_block"
+# EDGE_SELECTIONS=("gradient")
+# UPSTREAM_LAYERS=(1 2 3 0)
+# SAE_VARIANTS=("topk" "staircase")
+# EDGE_SET=(10 20)
 
 
 # Create log directory if it doesn't exist
