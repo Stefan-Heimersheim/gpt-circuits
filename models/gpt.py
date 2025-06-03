@@ -340,6 +340,8 @@ class GPT(nn.Module):
         return model
 
     def save(self, dir):
+        if not os.path.exists(dir):
+            os.makedirs(dir)
         meta_path = os.path.join(dir, "model.json")
         weights_path = os.path.join(dir, "model.safetensors")
 
