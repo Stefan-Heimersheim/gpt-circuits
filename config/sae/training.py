@@ -23,6 +23,19 @@ class SAETrainingConfig(TrainingConfig):
     loss_coefficients: LossCoefficients = field(default_factory=LossCoefficients)
 
 
+gpt2_defaults = {
+    "data_dir": "data/fineweb_edu_10b",
+    "eval_interval": 250,
+    "eval_steps": 100,
+    "batch_size": 1,
+    "gradient_accumulation_steps": 32 // 1,
+    "learning_rate": 5e-4,
+    "warmup_steps": 750,
+    "max_steps": 7500,
+    "decay_lr": True,
+    "min_lr": 1e-4,
+}
+
 # Shared training parameters
 shakespeare_64x4_defaults = {
     "data_dir": "data/shakespeare",
@@ -84,6 +97,12 @@ options: dict[str, SAETrainingConfig] = map_options(
     #     sparsity=(0.02, 0.06, 0.2, 0.2, 0.5),  # Targets L0s of ~10
     #     ),
     # ),
+    SAETrainingConfig(
+        name="topk.tblock.gpt2",
+        sae_config=sae_options["topk.tblock.gpt2"],
+        **gpt2_defaults,
+        loss_coefficients=LossCoefficients(),
+    ),
     SAETrainingConfig(
         name="topk.mlplayer.shk_64x4",
         sae_config=sae_options["topk.mlplayer.shakespeare_64x4"],

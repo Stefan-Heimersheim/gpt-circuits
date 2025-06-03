@@ -11,3 +11,4 @@ jaxtyping
 transformers
 huggingface_hub
 einops
+transformers

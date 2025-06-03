@@ -1,27 +1,22 @@
 """
 GPT-2 model. Adopted from: https://github.com/karpathy/build-nanogpt
 """
-
 import dataclasses
 import json
 import os
-from typing import Optional, Union, Tuple
+import warnings
+from collections import namedtuple
+from typing import Literal, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
-from config.gpt.models import GPTConfig, NormalizationStrategy
 from jaxtyping import Float, Int
 from safetensors.torch import load_model, save_model
 from torch import Tensor
 from torch.nn import functional as F
-from torch import Tensor
-from config.gpt.models import GPTConfig
-from jaxtyping import Float, Int
 
-import warnings
+from config.gpt.models import GPTConfig, NormalizationStrategy, gpt_options
 
-from collections import namedtuple
-from typing import Literal
 
 class DynamicTanh(nn.Module):
     def __init__(self, n_embd, init_alpha=2):
@@ -280,6 +275,57 @@ class GPT(nn.Module):
         # forward through transformer blocks starting with the specified layer
         return self.forward(resid_post, start_at_layer=layer_idx+1).logits
 
+
+    @classmethod
+    def from_pretrained(cls, model_type):
+        """Loads pretrained GPT-2 model weights from huggingface"""
+        assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
+        from transformers import \
+            GPT2LMHeadModel  # takes a long time to import??
+        print("loading weights from pretrained gpt: %s" % model_type)
+
+        # init a huggingface/transformers model
+        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
+        sd_hf = model_hf.state_dict()
+
+        # n_layer, n_head and n_embd are determined from model_type
+        # config_args = {
+        #     'gpt2':         dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
+        #     'gpt2-medium':  dict(n_layer=24, n_head=16, n_embd=1024), # 350M params
+        #     'gpt2-large':   dict(n_layer=36, n_head=20, n_embd=1280), # 774M params
+        #     'gpt2-xl':      dict(n_layer=48, n_head=25, n_embd=1600), # 1558M params
+        # }[model_type]
+        # config_args['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
+        # config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
+        # create a from-scratch initialized minGPT model
+        config = GPTConfig(gpt_options['gpt2'])
+        model = GPT(config)
+        sd = model.state_dict()
+        sd_keys = sd.keys()
+        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
+
+        # copy while ensuring all of the parameters are aligned and match in names and shapes
+        sd_keys_hf = sd_hf.keys()
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore these, just a buffer
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
+        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
+        # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
+        # this means that we have to transpose these weights when we import them
+        assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
+        for k in sd_keys_hf:
+            if any(k.endswith(w) for w in transposed):
+                # special treatment for the Conv1D weights we need to transpose
+                assert sd_hf[k].shape[::-1] == sd[k].shape
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k].t())
+            else:
+                # vanilla copy over the other parameters
+                assert sd_hf[k].shape == sd[k].shape
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k])
+
+        return model
+
     @classmethod
     def load(cls, dir, device: torch.device):
         meta_path = os.path.join(dir, "model.json")
@@ -319,3 +365,5 @@ class GPT(nn.Module):
                 raise Exception("Unknown layer norm strategy")
         return norm_class
 
+
+# %%

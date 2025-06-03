@@ -1,5 +1,8 @@
 # Training output
 checkpoints/
+checkpoints_gpt2/
+david_checkpoint/
+img/
 attributions/
 *.npy
 

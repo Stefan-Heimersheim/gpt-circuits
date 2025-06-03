@@ -1,11 +1,10 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from config import Config, map_options
 from config.gpt.models import GPTConfig, gpt_options
 
-from typing import Literal
 
 class HookPoint(str, Enum):
     RESID_PRE = "act"
@@ -55,7 +54,7 @@ class SAEConfig(Config):
         whitelisted_fields = ("n_features", "sae_variant", "top_k", "sae_keys")
         return {k: v for (k, v) in fields if k in whitelisted_fields and v is not None}
 
-def gen_sae_keys(n_features: tuple, loc : Literal["mlplayer", "mlpblock", "standard"] = 'standard') -> tuple[str, ...]:
+def gen_sae_keys(n_features: int, loc : Literal["mlplayer", "mlpblock", "standard"] = 'standard') -> tuple[str, ...]:
     match loc:
         case "mlplayer":
             assert n_features % 2 == 0, "n_features must be even for mlpplayer"
@@ -75,6 +74,13 @@ def gen_sae_keys(n_features: tuple, loc : Literal["mlplayer", "mlpblock", "stand
 
 # SAE configuration options
 sae_options: dict[str, SAEConfig] = map_options(
+    SAEConfig("topk.tblock.gpt2",
+        gpt_config = gpt_options['gpt2'],
+        n_features=tuple(768 * n for n in (32,)*13),
+        sae_variant=SAEVariant.TOPK,
+        top_k = (32,) * 13,
+        sae_keys=gen_sae_keys(n_features=13, loc="standard"),
+    ),
     SAEConfig(
         name="mlp.standardx8.shakespeare_64x4",
         gpt_config=gpt_options["ascii_64x4"],

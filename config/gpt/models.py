@@ -43,7 +43,7 @@ class GPTConfig(Config):
         # TODO: Is dangerous, should explicitly whitelist fields
         white_list = ['block_size', 'vocab_size', 'n_layer', 'n_head', 'n_embd', 'norm_strategy']
         return {k: v for (k, v) in fields if k in white_list}
-
+    
 
 # GPT configuration options
 gpt_options: dict[str, GPTConfig] = map_options(
@@ -55,7 +55,15 @@ gpt_options: dict[str, GPTConfig] = map_options(
         n_head=4,
         n_embd=64,
     ),
-     GPTConfig(
+    GPTConfig(
+        name="gpt2",
+        block_size=1024,
+        vocab_size=50257,
+        n_layer=12,
+        n_head=12,
+        n_embd=768
+    ),
+    GPTConfig(
         name="ascii_64x4_dyt",
         block_size=128,
         vocab_size=ASCIITokenizer.vocab_size,
