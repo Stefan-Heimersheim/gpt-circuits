@@ -1,12 +1,3 @@
-# %%
-%load_ext autoreload
-%autoreload 2
-
-# %%
-import os
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
-# %%
 from j_ln import egrad, DummySAE, MLP, LayerNorm, jacobian_exact, jacobian_full_block
 import torch
 from eindex import eindex
@@ -19,73 +10,6 @@ import numpy as np
 from typing import Callable, Dict, Any
 from opt_einsum import contract as opt_einsum
 
-# %
-
-def benchmark_function(func: Callable, 
-                      args: tuple, 
-                      n_warmup: int = 5,
-                      n_runs: int = 20) -> Dict[str, float]:
-    """Benchmark a function with warmup runs"""
-    # Warmup
-    for _ in range(n_warmup):
-        func(*args)
-        torch.cuda.synchronize()
-    
-    # Actual timing
-    times = []
-    for _ in range(n_runs):
-        start = time.perf_counter()
-        func(*args)
-        torch.cuda.synchronize()
-        end = time.perf_counter()
-        times.append(end - start)
-    
-    return {
-        "mean": np.mean(times),
-        "std": np.std(times),
-        "min": np.min(times),
-        "max": np.max(times)
-    }
-
-def sandwich_mlp_block(z : Float[Tensor, "batch seq feat"],
-             sae_mlpin : DummySAE,
-             mlp : MLP,
-             sae_mlpout : DummySAE,
-             ln: LayerNorm,
-             cache: dict) -> tuple[Float[Tensor, "batch seq feat"], Int[Tensor, "batch seq feat"]]:
-    """
-    takes sparse feature magnitudes and indices, and returns the sandwich product
-    """
-    
-    # top_k_values, in_feat_idx = torch.topk(in_feat_mags, sae_mlpin.k, dim=-1, sorted=True)
-    # #mask = in_feat_mags >= top_k_values[..., -1].unsqueeze(-1)
-    # z = in_feat_mags #* mask.float()
-
-    x = sae_mlpin.decode(z)
-
-    x_hat, x_pre_hat, x_scale = ln(x, return_std=True)
-    
-    cache['ln_pre_y'] = x_pre_hat
-    cache['ln_scale'] = x_scale
-    
-    h = mlp.W_in(x_hat)
-    phi_h = mlp.gelu(h)
-    y = mlp.W_out(phi_h)
-    y = y + x
-    
-    cache['h'] = h
-    cache['phi_h'] = phi_h
-
-    mlp_act_grads = egrad(mlp.gelu, h)
-    cache['mlp_act_grads'] = mlp_act_grads
-
-    out_feat_mags = sae_mlpout.encode(y)
-    
-    top_k_values_out, out_feat_idx = torch.topk(out_feat_mags, sae_mlpout.k, dim=-1, sorted=True)
-    mask_out = out_feat_mags >= top_k_values_out[..., -1].unsqueeze(-1)
-    out_feat_mags_sparse = out_feat_mags * mask_out.float()
-
-    return out_feat_mags_sparse, out_feat_mags, out_feat_idx
 
 @torch.compile
 def jacobian_fold_layernorm(
@@ -219,8 +143,7 @@ def jacobian_opt_compiled(
     ln_pre_y: Float[Tensor, "batch seq d_model"],
     ln_scale: Float[Tensor, "batch seq 1"],
     # Constants
-    D_model: int,
-    k: int
+    D_model: int
 ) -> Float[Tensor, "batch seq k2 k1"]:
     """
     Optimized version using torch.compile, assuming specific input tensor forms.
@@ -265,11 +188,12 @@ def jacobian_opt_compiled(
     #jacobian_skip = torch.matmul(w_enc_active, w_dec_active)
     jacobian_skip = w_enc_active @ w_dec_active
 
+
     final_jacobian = jacobian_mlp_path + jacobian_skip
-    return final_jacobian.abs_().sum() / (k ** 2)
+    return final_jacobian
 
 
-def jacobian_opt(out_idx: Int[Tensor, "batch seq k2"],
+def jacobian_block_ln(out_idx: Int[Tensor, "batch seq k2"],
                  in_idx: Int[Tensor, "batch seq k1"],
                  sae_mlpin: DummySAE,
                  sae_mlpout: DummySAE, 
@@ -288,13 +212,14 @@ def jacobian_opt(out_idx: Int[Tensor, "batch seq k2"],
     mlp_W_in_weight = mlp.W_in.weight
     
     D_model = ln_weight.shape[0]
-    k = sae_mlpin.k
+    
     w_enc_active = sae_mlpout.W_enc.T[out_idx]
     # Expected shape: (batch, seq, k2, d_model)
 
     # sae_mlpin_W_dec_T_param is sae_mlpin.W_dec.T
     # sae_mlpin_W_dec_T_param[:, in_idx] gives (d_model, batch, seq, k1)
     w_dec_active = sae_mlpin.W_dec.T[:, in_idx].permute(1, 2, 0, 3).contiguous()
+    k = sae_mlpin.k
     
     j_after = opt_einsum("bskd,dm,bsm,mi->bski",
                                 w_enc_active,
@@ -307,120 +232,5 @@ def jacobian_opt(out_idx: Int[Tensor, "batch seq k2"],
         w_dec_active,
         j_after,
         ln_weight, ln_pre_y, ln_scale,
-        D_model,
-        k
-    )
-
-
-# %%
-device = "cuda" if torch.cuda.is_available() else "cpu"
-@dataclass
-class GPTConfig:
-    n_embd: int
-    bias: bool = False
-
-def test_jacobians():
-   
-
-    # Small hyperparameters for correctness testing
-    test_batch_size = 2
-    test_seq_len = 3
-    test_n_feat = 128
-    test_n_embd = 32
-    test_k = 5
-
-    # Larger hyperparameters for benchmarking
-
-
-    # Setup models for correctness testing
-  
-
-    cfg = GPTConfig(n_embd=test_n_embd)
-
-    sae_mlpin = DummySAE(n_features=test_n_feat, n_embd=test_n_embd, k=test_k).to(device)
-    sae_mlpout = DummySAE(n_features=test_n_feat, n_embd=test_n_embd, k=test_k).to(device)
-    mlp = MLP(cfg).to(device)
-    ln = LayerNorm((test_n_embd,)).to(device)
-
-    # Generate input for correctness testing
-    torch.manual_seed(42)
-    z = torch.randn(test_batch_size, test_seq_len, test_n_feat, device=device)
-    z_top, z_idx = torch.topk(z, test_k, dim=-1, sorted=True)
-    mask = z >= z_top[..., -1].unsqueeze(-1)
-    z_sparse = z * mask.float()
-
-    # Setup caches
-    cache = {}
-    z_2_sparse, z_2, z_2_idx = sandwich_mlp_block(z_sparse, sae_mlpin, mlp, sae_mlpout, ln, cache)
-    mlp_grads = egrad(mlp.gelu, cache['h'])
-
-    # Get exact jacobian for correctness testing
-    true_cache = {}
-    exact_jacobian = jacobian_exact(lambda z: sandwich_mlp_block(z, sae_mlpin, mlp, sae_mlpout, ln, true_cache)[0], z_sparse)
-    exact_jacobian_dense = eindex(exact_jacobian, z_2_idx, z_idx, "batch seq [batch seq k2] [batch seq k1] -> batch seq k2 k1")
-
-    # Test correctness of full block
-    full_block_jacobian = jacobian_full_block(sae_mlpin, sae_mlpout, mlp, mlp_grads, ln.weight, cache)
-    full_block_jacobian_dense = eindex(full_block_jacobian, z_2_idx, z_idx, "batch seq [batch seq k2] [batch seq k1] -> batch seq k2 k1")
-
-    torch.testing.assert_close(full_block_jacobian_dense, exact_jacobian_dense)
-    print("Full block jacobian matches exact jacobian")
-
-    # Test correctness of sparse block
-    sparse_block_jacobian = jacobian_full_block_sparse(z_2_idx, z_idx, sae_mlpin, sae_mlpout, mlp, mlp_grads, ln.weight, cache["ln_pre_y"], cache["ln_scale"])
-
-    torch.testing.assert_close(sparse_block_jacobian, exact_jacobian_dense)
-    print("Sparse block jacobian matches exact jacobian")
-
-    # Corrected call
-    sparse_block_jacobian_opt = jacobian_opt(
-        z_2_idx, z_idx,
-        sae_mlpin, sae_mlpout,
-        mlp, mlp_grads,
-        ln.weight, cache["ln_pre_y"], cache["ln_scale"]
-    )
-
-    torch.testing.assert_close(sparse_block_jacobian_opt, exact_jacobian_dense)
-    print("Sparse block jacobian OPTIMIZED matches exact jacobian")
-
-# %%
-bench_batch_size = 32
-bench_seq_len = 1024
-bench_n_feat = 64*16
-bench_n_embd = 64
-bench_k = 10
-#--------------------------------------------------------------
-
-print("Running benchmarks with larger hyperparameters...")
-# Setup models for benchmarking
-cfg = GPTConfig(n_embd=bench_n_embd)
-sae_mlpin = DummySAE(n_features=bench_n_feat, n_embd=bench_n_embd, k=bench_k).to(device)
-sae_mlpout = DummySAE(n_features=bench_n_feat, n_embd=bench_n_embd, k=bench_k).to(device)
-mlp = MLP(cfg).to(device)
-ln = LayerNorm((bench_n_embd,)).to(device)
-
-# Generate input for benchmarking
-z = torch.randn(bench_batch_size, bench_seq_len, bench_n_feat, device=device)
-z_top, z_idx = torch.topk(z, bench_k, dim=-1, sorted=True)
-mask = z >= z_top[..., -1].unsqueeze(-1)
-z_sparse = z * mask.float()
-
-# Setup caches
-cache = {}
-z_2_sparse, z_2, z_2_idx = sandwich_mlp_block(z_sparse, sae_mlpin, mlp, sae_mlpout, ln, cache)
-mlp_grads = egrad(mlp.gelu, cache['h'])
-
-# # Run benchmarks
-# full_block_args = (sae_mlpin, sae_mlpout, mlp, mlp_grads, ln.weight, cache)
-# full_block_times = benchmark_function(jacobian_full_block, full_block_args)
-
-sparse_args = (z_2_idx, z_idx, sae_mlpin, sae_mlpout, mlp, mlp_grads, ln.weight, cache["ln_pre_y"], cache["ln_scale"])
-sparse_block_times = benchmark_function(jacobian_full_block_sparse, sparse_args)
-sparse_opt_times = benchmark_function(jacobian_opt, sparse_args)
-
-#print(f"Full block time: {full_block_times['mean'] * 1000:.2f} ± {full_block_times['std'] * 1000:.2f} ms")
-print(f"Sparse block time: {sparse_block_times['mean'] * 1000:.2f} ± {sparse_block_times['std'] * 1000:.2f} ms")
-print(f"Sparse opt time: {sparse_opt_times['mean'] * 1000:.2f} ± {sparse_opt_times['std'] * 1000:.2f} ms")
-
-
-# %%
+        D_model
+    ).abs_().sum() / (k ** 2)
