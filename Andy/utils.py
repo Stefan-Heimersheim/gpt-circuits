@@ -84,7 +84,7 @@ def get_SAE_activations_BLOCK(model, data, layers):
 
     while layer <= max_layer:
         if layer in layers:
-            activations[layer] = model.saes[f'{layer}'].encode(x)
+            activations[layer] = model.saes[f'{layer}_act'].encode(x)
         if layer < model.gpt.config.n_layer:
             x = model.gpt.transformer.h[layer](x)
             layer += 1
