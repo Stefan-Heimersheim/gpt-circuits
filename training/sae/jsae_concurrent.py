@@ -50,28 +50,6 @@ class JSaeTrainer(ConcurrentTrainer):
     """
     Train SAE weights for all layers concurrently.
     """
-
-    def __init__(self, config: SAETrainingConfig, load_from: str | Path):
-        """
-        Load and freeze GPT weights before training SAE weights.
-        """
-        # Create model
-        model = JSparsifiedGPT(config.sae_config, 
-                                  config.loss_coefficients, 
-                                  config.trainable_layers)
-
-        # Load GPT weights
-        model.load_gpt_weights(load_from)
-
-        # Freeze GPT parameters
-        for param in model.gpt.parameters():
-            param.requires_grad = False
-
-        SAETrainer.__init__(self, model, config)
-
-        if self.ddp:
-            # HACK: We're doing something that causes DDP to crash unless DDP optimization is disabled.
-            torch._dynamo.config.optimize_ddp = False  # type: ignore
             
     def save_checkpoint(self, model: JSparsifiedGPT, is_best: torch.Tensor, locs = ('mlpin', 'mlpout')):
         """
