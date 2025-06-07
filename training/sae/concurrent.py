@@ -7,7 +7,9 @@ $ torchrun --standalone --nproc_per_node=8 -m training.sae.concurrent --config=j
 
 import argparse
 from pathlib import Path
-
+import dataclasses
+import json
+import os
 import torch
 
 from config import TrainingConfig
@@ -15,6 +17,7 @@ from config.sae.training import SAETrainingConfig, options
 from models.sparsified import SparsifiedGPT, SparsifiedGPTOutput
 from models.factorysparsified import FactorySparsified
 from training.sae import SAETrainer
+
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,7 +58,7 @@ class ConcurrentTrainer(SAETrainer):
             # HACK: We're doing something that causes DDP to crash unless DDP optimization is disabled.
             torch._dynamo.config.optimize_ddp = False  # type: ignore
 
-    def output_to_loss(self, output: SparsifiedGPTOutput) -> torch.Tensor:
+    def output_to_loss(self, output: SparsifiedGPTOutput, is_eval: bool= False) -> torch.Tensor:
         """
         Return an array of losses instead of a single combined loss.
         """
@@ -68,11 +71,13 @@ class ConcurrentTrainer(SAETrainer):
         """
         loss.sum().backward()
 
+
     def save_checkpoint(self, model: SparsifiedGPT, is_best: torch.Tensor):
         """
         Save SAE weights for layers that have achieved a better validation loss.
         """
         # `is_best` contains a value for each layer indicating whether we have the best loss for that layer.
+        
         layers_to_save = [layer_name for should_save, layer_name in zip(is_best, model.saes.keys()) if should_save]
         model.save(self.config.out_dir, layers_to_save)
 

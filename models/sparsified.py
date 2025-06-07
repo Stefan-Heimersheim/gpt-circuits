@@ -367,7 +367,8 @@ class SparsifiedGPT(nn.Module):
             json.dump(meta, f)
 
         # Which layers should we save?
-        layers_to_save = layers_to_save or list(self.saes.keys())
+        if layers_to_save is None:
+            layers_to_save = list(self.saes.keys())
 
         # Save SAE modules
         for layer_name, module in self.saes.items():

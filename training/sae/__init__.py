@@ -1,5 +1,5 @@
 from typing import Optional
-
+from abc import abstractmethod
 import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Optimizer
@@ -8,6 +8,11 @@ from config.sae.training import SAETrainingConfig
 from models.sparsified import SparsifiedGPT, SparsifiedGPTOutput
 from training import Trainer
 from training.gpt import GPTTrainer
+from config.sae.models import SAEConfig
+
+import dataclasses
+import json
+import os
 
 
 class SAETrainer(Trainer):
@@ -35,13 +40,22 @@ class SAETrainer(Trainer):
         self.checkpoint_compound_ce_loss_increase = torch.tensor(0.0, device=config.device)
 
         super().__init__(model, config)
+             
+    def save_meta(self):
+        """
+        Save the SAE config to the output directory.
+        """
+        meta_path = os.path.join(self.config.out_dir, "sae.json")
+        meta = dataclasses.asdict(self.config.sae_config, dict_factory=SAEConfig.dict_factory)
+        with open(meta_path, "w") as f:
+            json.dump(meta, f)
 
     def calculate_loss(self, x, y, is_eval) -> tuple[torch.Tensor, Optional[dict[str, torch.Tensor]]]:
         """
         Calculate model loss.
         """
         output: SparsifiedGPTOutput = self.model(x, y, is_eval=is_eval)
-        loss = self.output_to_loss(output)
+        loss = self.output_to_loss(output, is_eval=is_eval)
         metrics = None
 
         # Only include metrics if in evaluation mode
@@ -50,11 +64,12 @@ class SAETrainer(Trainer):
 
         return loss, metrics
 
-    def output_to_loss(self, output: SparsifiedGPTOutput) -> torch.Tensor:
+    @abstractmethod
+    def output_to_loss(self, output: SparsifiedGPTOutput, is_eval: bool = False) -> torch.Tensor:
         """
         Convert model output to loss.
         """
-        ...
+        pass
 
     def gather_metrics(self, loss: torch.Tensor, output: SparsifiedGPTOutput) -> dict[str, torch.Tensor]:
         """
@@ -68,16 +83,10 @@ class SAETrainer(Trainer):
             "ce_loss_increases": output.ce_loss_increases,
             "compound_ce_loss_increase": output.compound_ce_loss_increase,
             "l0s": sae_l0s,
+            "stream_l1s": torch.stack(
+                [sae_loss_components.x_l1 for sae_loss_components in output.sae_loss_components.values()]
+            )
         }
-
-        # Add extra GPT metrics
-        metrics.update(
-            {
-                "stream_l1s": torch.stack(
-                    [sae_loss_components.x_l1 for sae_loss_components in output.sae_loss_components.values()]
-                )
-            }
-        )
              
         return metrics
 

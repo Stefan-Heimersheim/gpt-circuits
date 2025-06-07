@@ -56,37 +56,13 @@ class JSaeTrainer(ConcurrentTrainer):
         Save SAE weights for layers that have achieved a better validation loss.
         """
         # As weights are shared, only save if each layer is better than the previous best.
-        dir = self.config.out_dir
+        self.model.gpt.save(self.config.out_dir)
         
-        self.model.gpt.save(dir)
-
-        # Save SAE config
-        meta_path = os.path.join(dir, "sae.json")
-        meta = dataclasses.asdict(self.config.sae_config, dict_factory=SAEConfig.dict_factory)
-        with open(meta_path, "w") as f:
-            json.dump(meta, f)
         for layer_idx in self.model.layer_idxs:
             if is_best[layer_idx]:
-            # save this pair of saes!
                 for loc in locs:
-                    sae = self.model.saes[f'{layer_idx}_{loc}']
-                    if "jsae" not in sae.config.sae_variant:
-                        warnings.warn(f"JSaeTrainer: Saving non-JSAE SAE for layer {layer_idx} {loc}")
-                    sae.save(Path(dir))
-
-    def calculate_loss(self, x, y, is_eval) -> tuple[torch.Tensor, Optional[dict[str, torch.Tensor]]]:
-        """
-        Calculate model loss.
-        """
-        output: SparsifiedGPTOutput = self.model(x, y, is_eval=is_eval)
-        loss = self.output_to_loss(output, is_eval=is_eval)
-        metrics = None
-
-        # Only include metrics if in evaluation mode
-        if is_eval:
-            metrics = self.gather_metrics(loss, output)
-
-        return loss, metrics
+                    sae_key = f'{layer_idx}_{loc}'
+                    self.model.saes[sae_key].save(self.config.out_dir)
 
     # TODO: This is a very expensive operation, we should try to speed it up
     def output_to_loss(self, output: SparsifiedGPTOutput, is_eval: bool= False) -> torch.Tensor:
