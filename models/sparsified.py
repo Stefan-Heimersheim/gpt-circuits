@@ -19,6 +19,9 @@ from models.sae.standard import StandardSAE, StandardSAE_V2
 from models.sae.topk import StaircaseTopKSAE, StaircaseTopKSAEDetach, TopKSAE
 from config.sae.models import HookPoint
 
+from jaxtyping import Float
+from torch import Tensor
+
 import warnings
 @dataclasses.dataclass
 class SparsifiedGPTOutput:
@@ -26,16 +29,16 @@ class SparsifiedGPTOutput:
     Output from the forward pass of a sparsified GPT model.
     """
 
-    logits: torch.Tensor
-    cross_entropy_loss: torch.Tensor
+    logits: Float[Tensor, "batch seq vocab"]
+    cross_entropy_loss: Float[Tensor, ""]
     # Residual stream activations at every layer
-    activations: dict[int, torch.Tensor]
-    ce_loss_increases: Optional[torch.Tensor]
+    activations: dict[int, Float[Tensor, "batch seq n_embd"]]
+    ce_loss_increases: Optional[Float[Tensor, "n_layer"]]
     # Compound cross-entropy loss increase if using SAE reconstructions for all trainable layers
-    compound_ce_loss_increase: Optional[torch.Tensor]
+    compound_ce_loss_increase: Optional[Float[Tensor, ""]]
     sae_loss_components: dict[int, SAELossComponents]
-    feature_magnitudes: dict[int, torch.Tensor]
-    reconstructed_activations: dict[int, torch.Tensor]
+    feature_magnitudes: dict[int, Float[Tensor, "batch seq feature_size"]]
+    reconstructed_activations: dict[int, Float[Tensor, "batch seq n_embd"]]
     indices: dict[int, torch.Tensor] = None
     sparsity_losses: dict[int, torch.Tensor] = None # for storing sparsity losses
     aux_losses: dict[int, torch.Tensor] = None # for any other losses

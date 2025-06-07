@@ -309,6 +309,12 @@ class Trainer:
         Backward pass for the model. May be overridden by subclasses.
         """
         loss.backward()
+        
+    def save_meta(self):
+        """
+        Save meta config
+        """
+        pass
 
     def save_checkpoint(self, model, is_best: torch.Tensor):
         """

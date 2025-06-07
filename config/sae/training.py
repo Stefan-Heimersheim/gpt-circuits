@@ -127,6 +127,12 @@ options: dict[str, SAETrainingConfig] = map_options(
         **shakespeare_64x4_defaults,
         loss_coefficients=LossCoefficients(),
     ),
+    SAETrainingConfig(
+        name="topk.stair.tblock.shk_64x4",
+        sae_config=sae_options["topk-staircase-10-x8-share.shakespeare_64x4"],
+        **shakespeare_64x4_defaults,
+        loss_coefficients=LossCoefficients(),
+    ),
     
     SAETrainingConfig(
         name="mlp-topk.shakespeare_64x4",
@@ -194,12 +200,7 @@ options: dict[str, SAETrainingConfig] = map_options(
         **shakespeare_64x4_defaults,
         loss_coefficients=LossCoefficients(),
     ),
-    SAETrainingConfig(
-        name="topk-staircase-share.shakespeare_64x4",
-        sae_config=sae_options["topk-staircase-10-x8-share.shakespeare_64x4"],
-        **shakespeare_64x4_defaults,
-        loss_coefficients=LossCoefficients(),
-    ),
+
     SAETrainingConfig(
         name="topk-staircase-detach.shakespeare_64x4",
         sae_config=sae_options["topk-staircase-10-x8-detach.shakespeare_64x4"],
