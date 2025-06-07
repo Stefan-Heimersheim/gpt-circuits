@@ -53,6 +53,8 @@ class StaircaseSparsifiedGPT(SparsifiedGPT):
         self.layer_idxs = trainable_layers if trainable_layers else list(range(len(config.n_features)))
 
         self.saes = {}
+        n_features_list = list(config.n_features)
+        assert n_features_list == sorted(n_features_list), f"StaircaseSparsifiedGPT: n_features must be sorted. Got {n_features_list}."
         self.shared_context = TopKSharedContext(0, config.n_features[-1], config)
         for i in self.layer_idxs:
             is_biggest = i == self.layer_idxs[-1]
