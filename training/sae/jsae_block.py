@@ -31,6 +31,27 @@ class JSaeBlockTrainer(JSaeTrainer, SAETrainer):
     Train SAE weights for all layers concurrently.
     """
             
+    def compute_jacobian_loss(self, 
+                              idx_out : Int[Tensor, "batch seq k2"],
+                              idx_in : Int[Tensor, "batch seq k1"],
+                              **kwargs,
+                              ) -> torch.Tensor:
+        
+        if self.config.sae_config.gpt_config.norm_strategy == NormalizationStrategy.DYNAMIC_TANH:
+            norm_act_grads = kwargs.pop("norm_act_grads")
+            mlp_act_grads = kwargs.pop("mlp_act_grads")
+            
+            return jacobian_mlp_block_fast_noeindex(
+                self.model.saes[f'{layer_idx}_residmid'],
+                self.model.saes[f'{layer_idx}_residpost'],
+                self.model.gpt.transformer.h[layer_idx].mlp,
+                idx_out,
+                idx_in,
+                mlp_act_grads,
+                norm_act_grads,
+            )
+        
+            
     # TODO: This is a very expensive operation, we should try to speed it up
     def output_to_loss(self, output: SparsifiedGPTOutput, is_eval: bool= False) -> torch.Tensor:
         """
