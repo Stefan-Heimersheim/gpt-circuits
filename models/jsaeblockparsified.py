@@ -60,6 +60,7 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
                                         for idx, key in enumerate(sae_keys)]))
         
         self.sae_keys = sae_keys
+        self.norm_strategy = config.gpt_config.norm_strategy
         
     @property
     def eval_keys(self) -> Union[list[str], list[int]]:
@@ -99,7 +100,16 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
             self.make_cache_pre_hook(hooks, act, block.ln_2, key_in = f"{layer_idx}_residmid") 
             
             if "jsae" in self.config.sae_variant:
-                self.make_grad_hook(hooks, act, block.ln_2, key = f"{layer_idx}_normactgrads")
+                if self.norm_strategy == NormalizationStrategy.DYNAMIC_TANH:
+                    self.make_grad_hook(hooks, act, block.ln_2, key = f"{layer_idx}_normactgrads")
+                    
+                elif self.norm_strategy == NormalizationStrategy.LAYER_NORM:
+                    self.make_cache_pre_hook(hooks, act, block.ln_1, key_in = f"{layer_idx}_ln")
+                    act[f"{layer_idx}_gamma"] = block.ln_1.weight
+                    act[f"{layer_idx}_beta"] = block.ln_1.bias
+                    
+                else:
+                    raise ValueError(f"Invalid norm strategy: {self.norm_strategy}")
     
         try:
             yield act
