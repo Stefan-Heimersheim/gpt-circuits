@@ -199,7 +199,7 @@ def jacobian_full_block(sae_mlpin,
 
 
 @torch.compile(fullgraph=True, mode="max-autotune")
-def jacobian_opt_compiled(
+def jacobian_mlp_block_ln_fold(
     # Inputs related to indexing and sparse weights
     w_enc_active: Float[Tensor, "batch seq k2 d_model"],
     w_dec_active: Float[Tensor, "batch seq d_model k1"],
@@ -239,21 +239,22 @@ def jacobian_opt_compiled(
     #                              mlp_W_in_weight)
     
     # 3. Inline jacobian_fold_layernorm logic
+    j_before = w_dec_active
     id_scale_scalar_squeezed = (1.0 / ln_scale).squeeze(-1)
 
     id_term = torch.einsum("bsKi,i,bsir->bsKr",
-                           j_after, ln_gamma, w_dec_active)
+                           j_after, ln_gamma, j_before)
     #id_term = opt_einsum("bsKi,i,bsir->bsKr",
-     #                    j_after, ln_gamma, w_dec_active)
+     #                    j_after, ln_gamma, j_before)
     id_component = id_scale_scalar_squeezed.unsqueeze(-1).unsqueeze(-1) * id_term
 
     term1_off_ones = torch.einsum("bsKi,i->bsK", j_after, ln_gamma)
-    term2_off_ones = w_dec_active.sum(dim=-2) 
+    term2_off_ones = j_before.sum(dim=-2) 
     off_ones = torch.einsum("bsK,bsr->bsKr", term1_off_ones, term2_off_ones)
 
     gamma_ln_pre_y = ln_gamma * ln_pre_y
     off_y_left = torch.einsum("bsKi,bsi->bsK", j_after, gamma_ln_pre_y)
-    off_y_right = torch.einsum("bsi,bsir->bsr", ln_pre_y, w_dec_active)
+    off_y_right = torch.einsum("bsi,bsir->bsr", ln_pre_y, j_before)
     off_y = torch.einsum("bsK,bsr->bsKr", off_y_left, off_y_right)
     
     off_scale_factor = (id_scale_scalar_squeezed / D_model).unsqueeze(-1).unsqueeze(-1)
@@ -266,7 +267,7 @@ def jacobian_opt_compiled(
     jacobian_skip = w_enc_active @ w_dec_active
 
     final_jacobian = jacobian_mlp_path + jacobian_skip
-    return final_jacobian.abs_().sum() / (k ** 2)
+    return final_jacobian
 
 
 def jacobian_opt(out_idx: Int[Tensor, "batch seq k2"],
@@ -302,7 +303,7 @@ def jacobian_opt(out_idx: Int[Tensor, "batch seq k2"],
                                 mlp_grads,
                                 mlp_W_in_weight)
 
-    return jacobian_opt_compiled(
+    return jacobian_mlp_block_ln_fold(
         w_enc_active,
         w_dec_active,
         j_after,
@@ -383,6 +384,8 @@ def test_jacobians():
     torch.testing.assert_close(sparse_block_jacobian_opt, exact_jacobian_dense)
     print("Sparse block jacobian OPTIMIZED matches exact jacobian")
 
+
+test_jacobians()
 # %%
 bench_batch_size = 32
 bench_seq_len = 1024

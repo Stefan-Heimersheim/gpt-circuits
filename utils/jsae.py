@@ -8,6 +8,8 @@ from models.gpt import MLP
 import torch
 from models.sae import SparseAutoencoder
 
+from opt_einsum import contract as opt_einsum
+
 @torch.compile(mode="max-autotune", fullgraph=True)
 def jacobian_mlp(
     sae_mlpin : SparseAutoencoder,
@@ -307,3 +309,120 @@ def jacobian_mlp_block_fast_noeindex(
     # return jacobian.abs_().sum() / (k1_val * k2_val)
     # Or stick to the original if k is a hyperparameter unrelated to k1/k2 sizes:
     return jacobian.abs_().sum() / (k ** 2)
+
+
+
+@torch.compile(fullgraph=True, mode="max-autotune")
+def jacobian_mlp_block_ln_fold(
+    # Inputs related to indexing and sparse weights
+    w_enc_active: Float[Tensor, "batch seq k2 d_model"],
+    w_dec_active: Float[Tensor, "batch seq d_model k1"],
+    j_after: Float[Tensor, "batch seq k2 d_model"],
+    # out_idx: Int[Tensor, "batch seq k2"],
+    # in_idx: Int[Tensor, "batch seq k1"],
+    # # SAE weights
+    # sae_mlpout_W_enc_T_param: Float[Tensor, "n_feat_out d_model"], # Expects W_enc.T
+    # sae_mlpin_W_dec_T_param: Float[Tensor, "d_model n_feat_in"],  # Expects W_dec.T
+    # # MLP weights
+    # mlp_W_out_weight: Float[Tensor, "d_model d_mlp"],
+    # mlp_W_in_weight: Float[Tensor, "d_mlp d_model"],
+    # # Activations and gradients
+    # mlp_grads: Float[Tensor, "batch seq d_mlp"],
+    # LayerNorm parameters and cached values
+    ln_gamma: Float[Tensor, "d_model"],
+    ln_pre_y: Float[Tensor, "batch seq d_model"],
+    ln_scale: Float[Tensor, "batch seq 1"],
+    # Constants
+    D_model: int,
+    k: int
+) -> Float[Tensor, "batch seq k2 k1"]:
+    """
+    Optimized version using torch.compile, assuming specific input tensor forms.
+    """
+
+    # 1. Gather active weights for SAEs
+    # Based on user confirmation: sae_mlpout.W_enc.T[out_idx] is the target.
+    # So, sae_mlpout_W_enc_T_param is sae_mlpout.W_enc.T
+  
+    # Expected shape: (batch, seq, d_model, k1)
+
+    # j_after_inlined = opt_einsum("bskd,dm,bsm,mi->bski",
+    #                              w_enc_active,
+    #                              mlp_W_out_weight,
+    #                              mlp_grads,
+    #                              mlp_W_in_weight)
+    
+    # 3. Inline jacobian_fold_layernorm logic
+    j_before = w_dec_active
+    id_scale_scalar_squeezed = (1.0 / ln_scale).squeeze(-1)
+
+    id_term = torch.einsum("bsKi,i,bsir->bsKr",
+                           j_after, ln_gamma, j_before)
+    #id_term = opt_einsum("bsKi,i,bsir->bsKr",
+     #                    j_after, ln_gamma, j_before)
+    id_component = id_scale_scalar_squeezed.unsqueeze(-1).unsqueeze(-1) * id_term
+
+    term1_off_ones = torch.einsum("bsKi,i->bsK", j_after, ln_gamma)
+    term2_off_ones = j_before.sum(dim=-2) 
+    off_ones = torch.einsum("bsK,bsr->bsKr", term1_off_ones, term2_off_ones)
+
+    gamma_ln_pre_y = ln_gamma * ln_pre_y
+    off_y_left = torch.einsum("bsKi,bsi->bsK", j_after, gamma_ln_pre_y)
+    off_y_right = torch.einsum("bsi,bsir->bsr", ln_pre_y, j_before)
+    off_y = torch.einsum("bsK,bsr->bsKr", off_y_left, off_y_right)
+    
+    off_scale_factor = (id_scale_scalar_squeezed / D_model).unsqueeze(-1).unsqueeze(-1)
+    off_component = off_scale_factor * (off_ones + off_y)
+
+    jacobian_mlp_path = id_component - off_component
+
+    # 4. Skip connection part
+    #jacobian_skip = torch.matmul(w_enc_active, w_dec_active)
+    jacobian_skip = w_enc_active @ w_dec_active
+
+    final_jacobian = jacobian_mlp_path + jacobian_skip
+    return final_jacobian.abs_().sum() / (k ** 2)
+
+
+def jacobian_mlp_block_ln(
+            sae_mlpin: SparseAutoencoder,
+            sae_mlpout: SparseAutoencoder, 
+            mlp: MLP,
+            in_idx: Int[Tensor, "batch seq k1"],
+            out_idx: Int[Tensor, "batch seq k2"],
+            mlp_grads: Float[Tensor, "batch seq d_mlp"],
+            ln_weight: Float[Tensor, "d_model"],
+            ln_pre_y: Float[Tensor, "batch seq d_model"], #cached activation from layernorm, before scaling (ln(x) = ln_pre_y * ln_weight + ln_bias)
+            ln_scale: Float[Tensor, "batch seq 1"] #cached scale from layernorm, sqrt(sigma^2 + eps)
+                ) -> Float[Tensor, "batch seq k2 k1"]:
+    
+    # Based on user confirmation for jacobian_full_block_sparse:
+    # W_enc is (d_model, n_feat), so W_enc.T is (n_feat, d_model)
+    # W_dec is (n_feat, d_model), so W_dec.T is (d_model, n_feat)
+
+    mlp_W_out_weight = mlp.W_out
+    mlp_W_in_weight = mlp.W_in
+    
+    D_model = ln_weight.shape[0]
+    k = sae_mlpin.k
+    w_enc_active = sae_mlpout.W_enc.T[out_idx]
+    # Expected shape: (batch, seq, k2, d_model)
+
+    # sae_mlpin_W_dec_T_param is sae_mlpin.W_dec.T
+    # sae_mlpin_W_dec_T_param[:, in_idx] gives (d_model, batch, seq, k1)
+    w_dec_active = sae_mlpin.W_dec.T[:, in_idx].permute(1, 2, 0, 3).contiguous()
+    
+    j_after = opt_einsum("bskd,dm,bsm,mi->bski",
+                                w_enc_active,
+                                mlp_W_out_weight,
+                                mlp_grads,
+                                mlp_W_in_weight)
+
+    return jacobian_mlp_block_ln_fold(
+        w_enc_active,
+        w_dec_active,
+        j_after,
+        ln_weight, ln_pre_y, ln_scale,
+        D_model,
+        k
+    )

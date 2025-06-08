@@ -104,6 +104,14 @@ options: dict[str, SAETrainingConfig] = map_options(
         loss_coefficients=LossCoefficients(),
     ),
     SAETrainingConfig(
+        name="jsae.mlp_ln.shk_64x4",
+        sae_config=sae_options["jsae.mlp_ln.shk_64x4"],
+        **shakespeare_64x4_defaults,
+        loss_coefficients=LossCoefficients(
+            sparsity=(0.02, 0.02, 0.02, 0.02),
+        ),
+    ),
+    SAETrainingConfig(
         name="topk.mlplayer.shk_64x4",
         sae_config=sae_options["topk.mlplayer.shakespeare_64x4"],
         **shakespeare_64x4_defaults,

@@ -91,12 +91,12 @@ class SparsifiedGPT(nn.Module):
         return self.saes.keys()
         
     def get_sae_logits(self, 
-                       sae_key: Union[str, int], 
+                       eval_key: int | str,
                        activations: dict[int, torch.Tensor], 
                        encoder_outputs: dict[int, EncoderOutput]) -> torch.Tensor:
-        assert isinstance(sae_key, str), "sae_key must be a string for SparsifiedGPT"
-        layer_idx, _ = self.split_sae_key(sae_key)
-        resid = encoder_outputs[sae_key].reconstructed_activations
+        assert isinstance(eval_key, str), "eval_key must be a string for SparsifiedGPT"
+        layer_idx, _ = self.split_sae_key(eval_key)
+        resid = encoder_outputs[eval_key].reconstructed_activations
         sae_logits = self.gpt.forward(resid, start_at_layer=layer_idx).logits
         return sae_logits
 

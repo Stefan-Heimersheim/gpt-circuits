@@ -18,7 +18,7 @@ from typing import Optional, List, Union
 from models.gpt import DynamicTanh
 from config.gpt.models import NormalizationStrategy
 from models.sparsified import SparsifiedGPTOutput
-from utils.jsae import jacobian_mlp_block_fast_noeindex
+from utils.jsae import jacobian_mlp_block_fast_noeindex, jacobian_mlp_block_ln
 
 # Change current working directory to parent
 # while not os.getcwd().endswith("gpt-circuits"):
@@ -29,29 +29,7 @@ from utils.jsae import jacobian_mlp_block_fast_noeindex
 class JSaeBlockTrainer(JSaeTrainer, SAETrainer):
     """
     Train SAE weights for all layers concurrently.
-    """
-            
-    def compute_jacobian_loss(self, 
-                              idx_out : Int[Tensor, "batch seq k2"],
-                              idx_in : Int[Tensor, "batch seq k1"],
-                              **kwargs,
-                              ) -> torch.Tensor:
-        
-        if self.config.sae_config.gpt_config.norm_strategy == NormalizationStrategy.DYNAMIC_TANH:
-            norm_act_grads = kwargs.pop("norm_act_grads")
-            mlp_act_grads = kwargs.pop("mlp_act_grads")
-            
-            return jacobian_mlp_block_fast_noeindex(
-                self.model.saes[f'{layer_idx}_residmid'],
-                self.model.saes[f'{layer_idx}_residpost'],
-                self.model.gpt.transformer.h[layer_idx].mlp,
-                idx_out,
-                idx_in,
-                mlp_act_grads,
-                norm_act_grads,
-            )
-        
-            
+    """     
     # TODO: This is a very expensive operation, we should try to speed it up
     def output_to_loss(self, output: SparsifiedGPTOutput, is_eval: bool= False) -> torch.Tensor:
         """
@@ -70,27 +48,31 @@ class JSaeBlockTrainer(JSaeTrainer, SAETrainer):
             if "jsae" in self.model.saes[key].config.sae_variant:
                 if self.model.loss_coefficients.sparsity[layer_idx] == 0 and not is_eval: # compute jacobian loss only on eval if sparsity is 0
                     continue
-                topk_indices_residmid = output.indices[f'{layer_idx}_residmid']
-                topk_indices_residpost = output.indices[f'{layer_idx}_residpost']
-
+                
+                in_idx = output.indices[f'{layer_idx}_residmid']
+                out_idx = output.indices[f'{layer_idx}_residpost']
                 mlp_act_grads = output.activations[f"{layer_idx}_mlpactgrads"]
+                block = self.model.gpt.transformer.h[layer_idx]
+                mlp = block.mlp
+                sae_in = self.model.saes[f'{layer_idx}_residmid']
+                sae_out = self.model.saes[f'{layer_idx}_residpost']
 
+                
                 if self.config.sae_config.gpt_config.norm_strategy == NormalizationStrategy.DYNAMIC_TANH:
-
-                    jacobian_loss = jacobian_mlp_block_fast_noeindex(
-                        self.model.saes[f'{layer_idx}_residmid'],
-                        self.model.saes[f'{layer_idx}_residpost'],
-                        self.model.gpt.transformer.h[layer_idx].mlp,
-                        topk_indices_residmid,
-                        topk_indices_residpost,
-                        mlp_act_grads,
-                        norm_act_grads,
-                    )
-
-                # Each SAE has it's own loss term, and are trained "independently"
-                # so we will put the jacobian loss into the aux loss term
-                # for the sae_mlpout for each pair of SAEs
-                jacobian_losses[layer_idx] = jacobian_loss
+                    dyt_grads = output.activations[f"{layer_idx}_normactgrads"]
+                    j_loss = jacobian_mlp_block_fast_noeindex(sae_in, sae_out, mlp, in_idx, out_idx, mlp_act_grads, dyt_grads)
+                    
+                elif self.config.sae_config.gpt_config.norm_strategy == NormalizationStrategy.LAYER_NORM:
+                    resid_mid = output.activations[f"{layer_idx}_residmid"]
+                    _, ln_pre_x, ln_scale = block.ln_2(resid_mid, return_std=True)
+                    gamma = block.ln_2.weight
+                    j_loss = jacobian_mlp_block_ln(sae_in, sae_out, mlp, in_idx, out_idx, mlp_act_grads, gamma, ln_pre_x, ln_scale)
+                    
+                else:
+                    raise ValueError(f"Jacobian not defined for normalization strategy: {self.config.sae_config.gpt_config.norm_strategy}")
+                
+                jacobian_losses[layer_idx] = j_loss
+                
             else:
                 warnings.warn(f"JSaeTrainer: Skipping non-JSAE SAE for layer {layer_idx}")
 

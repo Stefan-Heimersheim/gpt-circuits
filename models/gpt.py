@@ -28,21 +28,42 @@ class DynamicTanh(nn.Module):
     def forward(self, x : Float[Tensor, "batch seq n_embd"]) -> torch.Tensor:
         x = torch.tanh(self.alpha * x)
         return self.gamma * x + self.beta
+
+class LayerNorm(nn.Module):
+    def __init__(self, n_embd, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(n_embd))
+        self.bias = nn.Parameter(torch.zeros(n_embd))
+
+    def forward(
+        self, x: Float[torch.Tensor, "batch pos d_model"], return_std: bool = False
+    ) -> Float[torch.Tensor, "batch pos d_model"]:
+        
+        x = x - x.mean(-1, keepdim=True)  # [batch, pos, length]
+        scale: Float[torch.Tensor, "batch pos 1"] = (x.pow(2).mean(-1, keepdim=True) + self.eps).sqrt()
+        ln_pre_y = x / scale
+        ln_y = ln_pre_y * self.weight + self.bias
+        
+        if return_std:
+            return ln_y, ln_pre_y, scale
+        else:
+            return ln_y
     
 
 def norm_factory(loc : Literal["attn", "mlp", "final"], config: GPTConfig) -> nn.Module:
     match config.norm_strategy:
         case NormalizationStrategy.LAYER_NORM:
-            return nn.LayerNorm(config.n_embd)
+            return LayerNorm(config.n_embd)
         
         case NormalizationStrategy.DYNAMIC_TANH:
             match loc:
                 case "attn":
-                    return nn.LayerNorm(config.n_embd)
+                    return LayerNorm(config.n_embd)
                 case "mlp":
                     return DynamicTanh(config.n_embd, init_alpha=config.alpha_mlp)
                 case "final":
-                    return nn.LayerNorm(config.n_embd)
+                    return LayerNorm(config.n_embd)
                 case _:
                     raise ValueError(f"Invalid location: {loc}")
         

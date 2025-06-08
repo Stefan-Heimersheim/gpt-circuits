@@ -29,6 +29,7 @@ def get_trainer_class(sae_variant: SAEVariant) -> type:
 class Args:
     config: str
     load_from: str = "shakespeare_64x4"
+    checkpoint_dir: Optional[str] = None
 
     # TrainingConfig overrides
     name: Optional[str] = None
@@ -134,7 +135,9 @@ if __name__ == "__main__":
     print("Applying command-line overrides...")
     apply_overrides(args, config)
 
-    load_path = Path(TrainingConfig.checkpoints_dir) / Path(args.load_from)
+    # Use checkpoint_dir override if provided, otherwise use default
+    checkpoint_base = args.checkpoint_dir if args.checkpoint_dir else TrainingConfig.checkpoints_dir
+    load_path = Path(checkpoint_base) / Path(args.load_from)
     trainer = trainer_class(config, load_from=load_path)
 
     if trainer_class in (JSaeBlockTrainer, JSaeTrainer):

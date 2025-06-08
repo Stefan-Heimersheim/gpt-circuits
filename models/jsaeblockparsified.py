@@ -63,22 +63,23 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
         self.norm_strategy = config.gpt_config.norm_strategy
         
     @property
-    def eval_keys(self) -> Union[list[str], list[int]]:
+    def eval_keys(self) -> list[str]:
         return self.layer_idxs
     
     @torch.no_grad()
-    def get_sae_logits(self, 
-                       layer_idx: int, 
+    def get_sae_logits(self,
+                       eval_key : int, 
                        activations: dict[int, torch.Tensor], 
                        encoder_outputs: dict[int, EncoderOutput]) -> torch.Tensor:
         
-        assert isinstance(layer_idx, int), "layer_idx must be an integer for JBlockSparsifiedGPT"
-        block = self.gpt.transformer.h[layer_idx]
-        resid_mid_recon = encoder_outputs[f"{layer_idx}_residmid"].reconstructed_activations
-        resid_post = block.mlp(block.ln_2(resid_mid_recon)) + resid_mid_recon
-        resid_post_recon = self.saes[f"{layer_idx}_residpost"](resid_post).reconstructed_activations
+        assert isinstance(eval_key, int), "eval_key must be an integer for JBlockSparsifiedGPT"
         
-        return self.gpt.forward(resid_post_recon, start_at_layer=layer_idx+1).logits
+        block = self.gpt.transformer.h[eval_key]
+        resid_mid_recon = encoder_outputs[f"{eval_key}_residmid"].reconstructed_activations
+        resid_post = block.mlp(block.ln_2(resid_mid_recon)) + resid_mid_recon
+        resid_post_recon = self.saes[f"{eval_key}_residpost"](resid_post).reconstructed_activations
+        
+        return self.gpt.forward(resid_post_recon, start_at_layer=eval_key+1).logits
     
     @contextmanager
     def record_activations(self):
@@ -102,11 +103,9 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
             if "jsae" in self.config.sae_variant:
                 if self.norm_strategy == NormalizationStrategy.DYNAMIC_TANH:
                     self.make_grad_hook(hooks, act, block.ln_2, key = f"{layer_idx}_normactgrads")
-                    
+                
                 elif self.norm_strategy == NormalizationStrategy.LAYER_NORM:
-                    self.make_cache_pre_hook(hooks, act, block.ln_1, key_in = f"{layer_idx}_ln")
-                    act[f"{layer_idx}_gamma"] = block.ln_1.weight
-                    act[f"{layer_idx}_beta"] = block.ln_1.bias
+                    pass #already cached residmid
                     
                 else:
                     raise ValueError(f"Invalid norm strategy: {self.norm_strategy}")
