@@ -5,7 +5,7 @@ import torch
 
 from config import TrainingConfig, map_options
 
-from .models import SAEConfig, sae_options
+from config.sae.models import SAEConfig, sae_options
 
 
 @dataclass

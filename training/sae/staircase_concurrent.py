@@ -5,40 +5,19 @@ $ python -m training.sae.staircase_concurrent --config=topk-staircase-share.shak
 $ torchrun --standalone --nproc_per_node=8 -m training.sae.staircase_concurrent --config=topk-staircase-share.stories_256x4 [--load_from=stories_256x4]
 """
 
-import argparse
-import dataclasses
-import json
-import os
 from pathlib import Path
 
 import torch
 
-from config import TrainingConfig
-from config.sae.models import SAEConfig
-from config.sae.training import options
 from models.sparsified import SparsifiedGPT
-from models.sae.topk import StaircaseTopKSAE
 from training.sae.concurrent import ConcurrentTrainer
 from models.sparsified import SparsifiedGPTOutput
-from models.factorysparsified import FactorySparsified
-from config.sae.models import HookPoint
 
 import einops
 
 from torch import Tensor
 from jaxtyping import Bool, Float
 from typing import Tuple
-
-def parse_args() -> argparse.Namespace:
-    """
-    Parse command line arguments.
-    """
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, help="Training config")
-    parser.add_argument("--load_from", type=str, help="GPT model weights to load", default="shakespeare_64x4")
-    parser.add_argument("--name", type=str, help="Model name for checkpoints")
-    parser.add_argument("--max_steps", type=int, help="Maximum number of steps to train")
-    return parser.parse_args()
 
 
 class StaircaseConcurrentTrainer(ConcurrentTrainer):
@@ -101,22 +80,3 @@ class StaircaseConcurrentTrainer(ConcurrentTrainer):
             metrics[f"l0_{sae_key}"] = l0_per_chunk
         
         return metrics
-
-
-if __name__ == "__main__":
-    # Parse command line arguments
-    args = parse_args()
-
-    # Load configuration
-    config_name = args.config
-    config = options[config_name]
-    assert "staircase" in config.sae_config.sae_variant, "Staircase trainer must use staircase SAE variant"
-    # Update outdir
-    if args.name:
-        config.name = args.name
-    if args.max_steps:
-        config.max_steps = args.max_steps
-
-    # Initialize trainer
-    trainer = StaircaseConcurrentTrainer(config, load_from=TrainingConfig.checkpoints_dir / args.load_from)
-    trainer.train()

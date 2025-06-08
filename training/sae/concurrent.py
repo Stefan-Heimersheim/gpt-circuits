@@ -5,32 +5,13 @@ $ python -m training.sae.concurrent --config=standard.shakespeare_64x4 --load_fr
 $ torchrun --standalone --nproc_per_node=8 -m training.sae.concurrent --config=jumprelu.stories_256x4 --load_from=stories_256x4
 """
 
-import argparse
 from pathlib import Path
-import dataclasses
-import json
-import os
 import torch
 
-from config import TrainingConfig
-from config.sae.training import SAETrainingConfig, options
+from config.sae.training import SAETrainingConfig
 from models.sparsified import SparsifiedGPT, SparsifiedGPTOutput
 from models.factorysparsified import FactorySparsified
 from training.sae import SAETrainer
-
-
-
-def parse_args() -> argparse.Namespace:
-    """
-    Parse command line arguments.
-    """
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, help="Training config")
-    parser.add_argument("--load_from", type=str, help="GPT model weights to load", default='shakespeare_64x4')
-    parser.add_argument("--name", type=str, help="Model name for checkpoints")
-    parser.add_argument("--max_steps", type=int, help="Maximum number of steps to train")
-    parser.add_argument("--k", type=int, help="Top-k value for top-k SAE")
-    return parser.parse_args()
 
 
 class ConcurrentTrainer(SAETrainer):
@@ -80,28 +61,3 @@ class ConcurrentTrainer(SAETrainer):
         
         layers_to_save = [layer_name for should_save, layer_name in zip(is_best, model.saes.keys()) if should_save]
         model.save(self.config.out_dir, layers_to_save)
-
-
-if __name__ == "__main__":
-    # Parse command line arguments
-    args = parse_args()
-
-    # Load configuration
-    config_name = args.config
-    config = options[config_name]
-    assert "staircase" not in config.sae_config.sae_variant, "Staircase SAE variant is not supported for concurrent training."
-    # Update outdir
-    if args.name:
-        config.name = args.name
-
-    if args.max_steps:
-        config.max_steps = args.max_steps
-        
-    if args.k:
-        config.sae_config.top_k = (args.k,) * len(config.sae_config.top_k)
-        config.name = f"{config.name}.k.{args.k}"
-        
-
-    # Initialize trainer
-    trainer = ConcurrentTrainer(config, load_from=TrainingConfig.checkpoints_dir / args.load_from)
-    trainer.train()
