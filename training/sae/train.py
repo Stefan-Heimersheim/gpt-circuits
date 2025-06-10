@@ -139,7 +139,7 @@ if __name__ == "__main__":
     load_path = Path(checkpoint_base) / Path(args.load_from)
     trainer = trainer_class(config, load_from=load_path)
 
-    if trainer_class in (JSaeBlockTrainer, JSaeTrainer):
+    if isinstance(trainer, JSaeTrainer):
         print(f"{trainer.model.saes.keys()=}")
         print(f"{trainer.model.layer_idxs=}")
         print(f"Using sparsity coefficients: {trainer.model.loss_coefficients.sparsity}")
