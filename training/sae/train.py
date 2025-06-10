@@ -10,13 +10,12 @@ from config.sae.models import SAEVariant
 from config.sae.training import SAETrainingConfig, options
 from training.sae.concurrent import ConcurrentTrainer
 from training.sae.staircase_concurrent import StaircaseConcurrentTrainer
-from training.sae.jsae_block import JSaeBlockTrainer
 from training.sae.jsae_concurrent import JSaeTrainer
 
 
 def get_trainer_class(sae_variant: SAEVariant) -> type:
     return {
-        SAEVariant.JSAE_BLOCK: JSaeBlockTrainer,
+        SAEVariant.JSAE_BLOCK: JSaeTrainer,
         SAEVariant.JSAE: JSaeTrainer,
         SAEVariant.STAIRCASE_BLOCK: StaircaseConcurrentTrainer,
         SAEVariant.TOPK_STAIRCASE: StaircaseConcurrentTrainer,

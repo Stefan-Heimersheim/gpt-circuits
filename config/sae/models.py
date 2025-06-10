@@ -4,7 +4,7 @@ from typing import Literal, Optional
 
 from config import Config, map_options
 from config.gpt.models import GPTConfig, gpt_options
-
+from collections import namedtuple
 
 class HookPoint(str, Enum):
     RESID_PRE = "act"
@@ -15,6 +15,8 @@ class HookPoint(str, Enum):
     ACT = "act" #alias for RESID_PRE
     ATTN_OUT = "attnout"
     ATTN_IN = "attnin"
+    MLP_ACT_GRAD = "mlpactgrads"
+    DYT_ACT_GRAD = "normactgrads"
     
     @classmethod
     def all(cls) -> list[str]:
@@ -33,7 +35,24 @@ class SAEVariant(str, Enum):
     JSAE = "jsae"
     JSAE_BLOCK = "jsae_block"
     STAIRCASE_BLOCK = "staircase_block"
+    
 
+
+SAELocations = namedtuple('SAELocations', ['in_loc', 'out_loc'])
+
+location_map: dict[SAEVariant, SAELocations] = {
+    SAEVariant.JSAE: SAELocations(HookPoint.MLP_IN.value, HookPoint.MLP_OUT.value),
+    SAEVariant.JSAE_BLOCK: SAELocations(HookPoint.RESID_MID.value, HookPoint.RESID_POST.value),
+}
+
+def gen_sae_locations(sae_variant: SAEVariant) -> SAELocations:
+    """
+    Generate the location of the SAE weights to train.
+    """
+    if sae_variant not in location_map:
+        raise ValueError(f"gen_sae_locations: Unsupported SAE variant: {sae_variant}")
+    return location_map[sae_variant]
+    
 @dataclass
 class SAEConfig(Config):
     gpt_config: GPTConfig = field(default_factory=GPTConfig)

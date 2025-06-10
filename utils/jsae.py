@@ -15,9 +15,9 @@ def jacobian_mlp(
     sae_mlpin : SparseAutoencoder,
     sae_mlpout : SparseAutoencoder,
     mlp: MLP,
-    topk_indices_mlpin: torch.Tensor,
-    topk_indices_mlpout: torch.Tensor,
-    mlp_act_grads: torch.Tensor,
+    topk_indices_mlpin: Int[Tensor, "batch seq k1"],
+    topk_indices_mlpout: Int[Tensor, "batch seq k2"],
+    mlp_act_grads: Float[Tensor, "batch seq d_mlp"],
 ) -> torch.Tensor:
     # required to transpose mlp weights as nn.Linear stores them backwards
     # everything should be of shape (d_out, d_in)
@@ -385,11 +385,11 @@ def jacobian_mlp_block_ln_fold(
 
 
 def jacobian_mlp_block_ln(
-            sae_mlpin: SparseAutoencoder,
-            sae_mlpout: SparseAutoencoder, 
+            sae_residmid: SparseAutoencoder,
+            sae_residpost: SparseAutoencoder, 
             mlp: MLP,
-            in_idx: Int[Tensor, "batch seq k1"],
-            out_idx: Int[Tensor, "batch seq k2"],
+            topk_indices_residmid: Int[Tensor, "batch seq k1"],
+            topk_indices_residpost: Int[Tensor, "batch seq k2"],
             mlp_grads: Float[Tensor, "batch seq d_mlp"],
             ln_weight: Float[Tensor, "d_model"],
             ln_pre_y: Float[Tensor, "batch seq d_model"], #cached activation from layernorm, before scaling (ln(x) = ln_pre_y * ln_weight + ln_bias)
@@ -404,13 +404,13 @@ def jacobian_mlp_block_ln(
     mlp_W_in_weight = mlp.W_in
     
     D_model = ln_weight.shape[0]
-    k = sae_mlpin.k
-    w_enc_active = sae_mlpout.W_enc.T[out_idx]
+    k = sae_residmid.k
+    w_enc_active = sae_residpost.W_enc.T[topk_indices_residpost]
     # Expected shape: (batch, seq, k2, d_model)
 
-    # sae_mlpin_W_dec_T_param is sae_mlpin.W_dec.T
-    # sae_mlpin_W_dec_T_param[:, in_idx] gives (d_model, batch, seq, k1)
-    w_dec_active = sae_mlpin.W_dec.T[:, in_idx].permute(1, 2, 0, 3).contiguous()
+    # sae_residmid_W_dec_T_param is sae_residmid.W_dec.T
+    # sae_residmid_W_dec_T_param[:, in_idx] gives (d_model, batch, seq, k1)
+    w_dec_active = sae_residmid.W_dec.T[:, topk_indices_residmid].permute(1, 2, 0, 3).contiguous()
     
     j_after = opt_einsum("bskd,dm,bsm,mi->bski",
                                 w_enc_active,

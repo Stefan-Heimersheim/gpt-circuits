@@ -229,7 +229,6 @@ class Trainer:
             # We're using a quirky comparison that allows `loss` to have dimensionality.
             if self.best_val_loss.tolist() != best_val_loss.tolist() and step > 0:
                 self.best_val_loss = best_val_loss
-                self.save_meta()
                 self.save_checkpoint(self.unwrapped_model, is_best)
 
             # Log metrics unless skipped

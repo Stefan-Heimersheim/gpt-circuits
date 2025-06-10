@@ -41,15 +41,7 @@ class SAETrainer(Trainer):
 
         super().__init__(model, config)
              
-    def save_meta(self):
-        """
-        Save the SAE config to the output directory.
-        """
-        meta_path = os.path.join(self.config.out_dir, "sae.json")
-        meta = dataclasses.asdict(self.config.sae_config, dict_factory=SAEConfig.dict_factory)
-        with open(meta_path, "w") as f:
-            json.dump(meta, f)
-
+    
     def calculate_loss(self, x, y, is_eval) -> tuple[torch.Tensor, Optional[dict[str, torch.Tensor]]]:
         """
         Calculate model loss.

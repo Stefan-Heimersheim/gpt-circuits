@@ -353,30 +353,36 @@ class SparsifiedGPT(nn.Module):
         device = next(self.gpt.lm_head.parameters()).device
         self.gpt = GPT.load(dir, device=device)
 
-    def save(self, dir, layers_to_save: Optional[list[str]] = None):
+
+    def save_meta(self):
+        """
+        Save the SAE config to the output directory.
+        """
+        meta_path = os.path.join(self.config.out_dir, "sae.json")
+        meta = dataclasses.asdict(self.config.sae_config, dict_factory=SAEConfig.dict_factory)
+        with open(meta_path, "w") as f:
+            json.dump(meta, f)
+
+    def save(self, dir, sae_keys_to_save: Optional[list[str]] = None):
         """
         Save the sparsified GPT model to a directory.
 
         :param dir: Directory for saving weights.
-        :param layers_to_save: Module names for SAE layers to save. If None, all layers will be saved.
+        :param sae_keys_to_save: Module names for SAE layers to save. If None, all layers will be saved.
         """
         # Save GPT model
         self.gpt.save(dir)
-
         # Save SAE config
-        meta_path = os.path.join(dir, "sae.json")
-        meta = dataclasses.asdict(self.config, dict_factory=SAEConfig.dict_factory)
-        with open(meta_path, "w") as f:
-            json.dump(meta, f)
+        self.save_meta()
 
         # Which layers should we save?
-        if layers_to_save is None:
-            layers_to_save = list(self.saes.keys())
+        if sae_keys_to_save is None:
+            sae_keys_to_save = list(self.saes.keys())
 
         # Save SAE modules
+        print(f"Saving SAEs: {sae_keys_to_save}")
         for layer_name, module in self.saes.items():
-            if layer_name in layers_to_save:
-                print(f"Saving SAE {layer_name}")
+            if layer_name in sae_keys_to_save:
                 assert isinstance(module, SparseAutoencoder)
                 module.save(Path(dir))
 

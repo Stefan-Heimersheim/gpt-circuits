@@ -29,34 +29,17 @@ class StaircaseConcurrentTrainer(ConcurrentTrainer):
         """
         Save SAE weights for layers that have achieved a better validation loss.
         """
-        # As weights are shared, only save if each layer is better than the previous best.
-        
+        # As weights are shared, only save if all layers are better.
         if torch.all(is_best):
-            layers_to_save = list(self.model.saes.keys())
-        else:
-            layers_to_save = None
-            
-        model.save(self.config.out_dir, layers_to_save)
+            model.save(self.config.out_dir)
         
-        # is_best : Bool[Tensor, "2 * n_layer"]
-        # is_best = einops.rearrange(is_best, "(n_layer loc) -> n_layer loc", loc=2)
-        # is_best = torch.all(is_best, dim=-1) # (n_layer)
-        
-        # for layer_idx in self.model.layer_idxs:
-        #     if is_best[layer_idx]:
-        #         for loc in [HookPoint.RESID_MID.value, HookPoint.RESID_POST.value]:
-        #             sae_key = f"{layer_idx}_{loc}"
-        #             sae = self.model.saes[sae_key]
-        #             assert "staircase" in sae.config.sae_variant, \
-        #                 f"Staircase trainer must use staircase SAE variant, Error: {sae.config.sae_variant}"
-        #             sae.save(Path(dir))
                 
     def gather_metrics(self, loss: torch.Tensor, output: SparsifiedGPTOutput) -> dict[str, torch.Tensor]:
         """
         Gather metrics from loss and model output.
         """
         metrics = super().gather_metrics(loss, output)
-        del metrics["l0s"] # don't need l0s per layer as for topk sae, l0 = k by definition
+        #del metrics["l0s"] # don't need l0s per layer as for topk sae, l0 = k by definition
         
         l0_per_chunk = {}
         for sae_idx, (sae_key, feature_magnitudes) in enumerate(output.feature_magnitudes.items()):
