@@ -27,11 +27,11 @@ gpt2_defaults = {
     "data_dir": "data/fineweb_edu_10b",
     "eval_interval": 250,
     "eval_steps": 100,
-    "batch_size": 1,
-    "gradient_accumulation_steps": 32 // 1,
+    "batch_size": 2,
+    "gradient_accumulation_steps": 16,
     "learning_rate": 5e-4,
     "warmup_steps": 750,
-    "max_steps": 7500,
+    "max_steps": 5000,
     "decay_lr": True,
     "min_lr": 1e-4,
 }
@@ -110,6 +110,12 @@ options: dict[str, SAETrainingConfig] = map_options(
         loss_coefficients=LossCoefficients(
             sparsity=(0.02, 0.02, 0.02, 0.02),
         ),
+    ),
+    SAETrainingConfig(
+        name="staircase.tblock.gpt2",
+        sae_config=sae_options["staircase.tblock.gpt2"],
+        **gpt2_defaults,
+        loss_coefficients=LossCoefficients(),
     ),
     SAETrainingConfig(
         name="topk.mlplayer.shk_64x4",
