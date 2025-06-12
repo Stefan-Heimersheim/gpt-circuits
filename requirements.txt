@@ -12,3 +12,6 @@ transformers
 huggingface_hub
 einops
 transformers
+tyro
+git+https://github.com/callummcdougall/eindex.git
+opt_einsum
