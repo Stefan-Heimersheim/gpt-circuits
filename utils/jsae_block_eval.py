@@ -15,7 +15,6 @@ from config.sae.training import SAETrainingConfig, options
 from models.gpt import MLP, DynamicTanh
 from models.jsaeblockparsified import JBlockSparsifiedGPT
 from training.sae.jsae_concurrent import JSaeTrainer
-from training.sae.jsae_block import JSaeBlockTrainer
 from models.sae import SparseAutoencoder
 from models.sparsified import SparsifiedGPTOutput
 from training.sae import SAETrainer

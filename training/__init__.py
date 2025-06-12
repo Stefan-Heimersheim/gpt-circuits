@@ -1,7 +1,7 @@
 """
 Trainer interface. Adopted from: https://github.com/karpathy/build-nanogpt
 """
-
+from abc import abstractmethod
 import dataclasses
 import inspect
 import math
@@ -99,6 +99,7 @@ class Trainer:
             split="val",
         )
 
+    @abstractmethod
     def calculate_loss(self, x, y, is_eval: bool) -> tuple[torch.Tensor, Optional[dict[str, torch.Tensor]]]:
         """
         Returns a tuple of (loss, metrics).
@@ -108,15 +109,16 @@ class Trainer:
         :param y: Target tensor.
         :param is_eval: Whether the model is in evaluation mode.
         """
-        ...
+        pass
 
+    @abstractmethod
     def configure_optimizer(self, model: nn.Module) -> Optimizer:
         """
         Configure the optimizer.
 
         :param model: The model to optimize, which is "unwrapped" using `model.module` if using DDP.
         """
-        ...
+        pass
 
     @property
     def is_main_process(self) -> bool:
@@ -306,6 +308,12 @@ class Trainer:
         Backward pass for the model. May be overridden by subclasses.
         """
         loss.backward()
+        
+    def save_meta(self):
+        """
+        Save meta config
+        """
+        pass
 
     def save_checkpoint(self, model, is_best: torch.Tensor):
         """

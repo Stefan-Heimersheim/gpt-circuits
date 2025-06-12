@@ -45,14 +45,14 @@ torchrun --standalone --nproc_per_node=8 -m training.gpt --config=shakespeare_64
 Configurations are stored in [config/sae](config/sae). The Trainers are located at [training/sae](training/sae). To run training, use:
 
 ```
-python -m training.sae.concurrent --config=standard.shakespeare_64x4 --load_from=shakespeare_64x4
+python -m training.sae.main --config=standard.shakespeare_64x4 --load_from=shakespeare_64x4
 ```
 
 To run the staircase SAE, use:
 
 ```
-python -m training.sae.staircase_concurrent --config=topk-staircase-share.shakespeare_64x4 --load_from=shakespeare_64x4
-python -m training.sae.concurrent --config=topk-staircase-noshare.shakespeare_64x4 --load_from=shakespeare_64x4
+python -m training.sae.main --config=topk-staircase-share.shakespeare_64x4 --load_from=shakespeare_64x4
+python -m training.sae.main --config=topk-staircase-noshare.shakespeare_64x4 --load_from=shakespeare_64x4
 ```
 
 ### SAE location conventions

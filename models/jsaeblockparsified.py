@@ -60,69 +60,28 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
                                         for idx, key in enumerate(sae_keys)]))
         
         self.sae_keys = sae_keys
+        self.norm_strategy = config.gpt_config.norm_strategy
         
+    @property
+    def eval_keys(self) -> list[str]:
+        return self.layer_idxs
     
-    def forward(
-        self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False
-    ) -> SparsifiedGPTOutput:
-        """
-        Forward pass of the sparsified model.
-
-        :param idx: Input tensor.
-        :param targets: Target tensor.
-        :param is_eval: Whether the model is in evaluation mode.
-        """
-        activations: dict[str, torch.Tensor]
-        encoder_outputs: dict[str, EncoderOutput]
+    # torch compiler doesn't like self.gpt.transformer.h[eval_key] for non-constant eval_key
+    @torch.compiler.disable
+    @torch.no_grad()
+    def get_sae_logits(self,
+                       eval_key : str, 
+                       activations: dict[str, torch.Tensor], 
+                       encoder_outputs: dict[str, EncoderOutput]) -> torch.Tensor:
         
-        with self.record_activations() as activations:
-            with self.use_saes() as encoder_outputs:
-                logits, cross_entropy_loss = self.gpt(idx, targets)
+        assert isinstance(eval_key, int), "eval_key must be an integer for JBlockSparsifiedGPT"
         
-        # If targets are provided during training evaluation, gather more metrics
-        ce_loss_increases = None
-        compound_ce_loss_increase = None
-        if is_eval and targets is not None:
-            # Calculate cross-entropy loss increase for each SAE pair
-            ce_loss_increases = []
-            for layer_idx in self.layer_idxs:
-                sae_key = f"{layer_idx}_residmid"
-                sae_logits = self.forward_with_sae_pair(layer_idx, encoder_outputs[sae_key].reconstructed_activations)
-                sae_ce_loss = F.cross_entropy(sae_logits.view(-1, sae_logits.size(-1)), targets.view(-1))
-                ce_loss_increases.append(sae_ce_loss - cross_entropy_loss)
-            ce_loss_increases = torch.stack(ce_loss_increases)
-
-            # Calculate compound cross-entropy loss as a result of patching activations.
-            with self.use_saes(activations_to_patch=self.saes.keys()):
-                _, compound_cross_entropy_loss = self.gpt(idx, targets)
-                compound_ce_loss_increase = compound_cross_entropy_loss - cross_entropy_loss
-
-        return SparsifiedGPTOutput(
-            logits=logits,
-            cross_entropy_loss=cross_entropy_loss,
-            activations=activations,
-            ce_loss_increases=ce_loss_increases,
-            compound_ce_loss_increase=compound_ce_loss_increase,
-            sae_loss_components={i: output.loss for i, output in encoder_outputs.items() if output.loss},
-            feature_magnitudes={i: output.feature_magnitudes for i, output in encoder_outputs.items()},
-            reconstructed_activations={i: output.reconstructed_activations for i, output in encoder_outputs.items()},
-            indices={i: output.indices for i, output in encoder_outputs.items()},
-        )
-        
-    # TODO: would be nice to have all the sparsifyGPTs under one class, and then branchout from there?
-    def forward_with_sae_pair(self, 
-                            layer_idx: int,    
-                            resid_mid_recon: Float[Tensor, "B T n_embd"]) -> torch.Tensor:
-        """
-        Forward pass of the model with patched activations.
-        """
-        sae_key = f"{layer_idx}_residpost"
-        block = self.gpt.transformer.h[layer_idx]
+        block = self.gpt.transformer.h[eval_key]
+        resid_mid_recon = encoder_outputs[f"{eval_key}_{HookPoint.RESID_MID.value}"].reconstructed_activations
         resid_post = block.mlp(block.ln_2(resid_mid_recon)) + resid_mid_recon
-        resid_post_recon = self.saes[sae_key](resid_post).reconstructed_activations
+        resid_post_recon = self.saes[f"{eval_key}_{HookPoint.RESID_POST.value}"](resid_post).reconstructed_activations
         
-        return self.gpt.forward(resid_post_recon, start_at_layer=layer_idx+1).logits
-            
+        return self.gpt.forward(resid_post_recon, start_at_layer=eval_key+1).logits
     
     @contextmanager
     def record_activations(self):
@@ -136,15 +95,22 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
         for layer_idx in self.layer_idxs:
             block = self.gpt.transformer.h[layer_idx]
             
-            self.make_cache_post_hook(hooks, act, block, key_out = f"{layer_idx}_residpost")
+            self.make_cache_post_hook(hooks, act, block, key_out = f"{layer_idx}_{HookPoint.RESID_POST.value}")
             
             if "jsae" in self.config.sae_variant:       
-                self.make_grad_hook(hooks, act, block.mlp.gelu, key = f"{layer_idx}_mlpactgrads")
+                self.make_grad_hook(hooks, act, block.mlp.gelu, key = f"{layer_idx}_{HookPoint.MLP_ACT_GRAD.value}")
             # Adding two hooks is okay, will execute in order
-            self.make_cache_pre_hook(hooks, act, block.ln_2, key_in = f"{layer_idx}_residmid") 
+            self.make_cache_pre_hook(hooks, act, block.ln_2, key_in = f"{layer_idx}_{HookPoint.RESID_MID.value}") 
             
             if "jsae" in self.config.sae_variant:
-                self.make_grad_hook(hooks, act, block.ln_2, key = f"{layer_idx}_normactgrads")
+                if self.norm_strategy == NormalizationStrategy.DYNAMIC_TANH:
+                    self.make_grad_hook(hooks, act, block.ln_2, key = f"{layer_idx}_{HookPoint.DYT_ACT_GRAD.value}")
+                
+                elif self.norm_strategy == NormalizationStrategy.LAYER_NORM:
+                    pass #already cached residmid
+                    
+                else:
+                    raise ValueError(f"Invalid norm strategy: {self.norm_strategy}")
     
         try:
             yield act
@@ -170,10 +136,10 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
 
             block = self.gpt.transformer.h[layer_idx]
 
-            sae_key = f'{layer_idx}_residmid'
+            sae_key = f'{layer_idx}_{HookPoint.RESID_MID.value}'
             self.make_sae_pre_hook(hooks, encoder_outputs, block.ln_2, sae_key, activations_to_patch)
             
-            sae_key = f'{layer_idx}_residpost'
+            sae_key = f'{layer_idx}_{HookPoint.RESID_POST.value}'
             self.make_sae_post_hook(hooks, encoder_outputs, block, sae_key, activations_to_patch)
             
         try:

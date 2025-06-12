@@ -1,6 +1,7 @@
 # Training output
 checkpoints/
 checkpoints_gpt2/
+checkpoints_ln/
 david_checkpoint/
 img/
 attributions/

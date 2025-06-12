@@ -3,7 +3,7 @@ import json
 import os
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, Optional, Type
+from typing import Iterable, Optional, Type, Union
 
 import torch
 import torch.nn as nn
@@ -19,6 +19,9 @@ from models.sae.standard import StandardSAE, StandardSAE_V2
 from models.sae.topk import StaircaseTopKSAE, StaircaseTopKSAEDetach, TopKSAE
 from config.sae.models import HookPoint
 
+from jaxtyping import Float
+from torch import Tensor
+
 import warnings
 @dataclasses.dataclass
 class SparsifiedGPTOutput:
@@ -26,16 +29,16 @@ class SparsifiedGPTOutput:
     Output from the forward pass of a sparsified GPT model.
     """
 
-    logits: torch.Tensor
-    cross_entropy_loss: torch.Tensor
+    logits: Float[Tensor, "batch seq vocab"]
+    cross_entropy_loss: Float[Tensor, ""]
     # Residual stream activations at every layer
-    activations: dict[int, torch.Tensor]
-    ce_loss_increases: Optional[torch.Tensor]
+    activations: dict[int, Float[Tensor, "batch seq n_embd"]]
+    ce_loss_increases: Optional[Float[Tensor, "n_layer"]]
     # Compound cross-entropy loss increase if using SAE reconstructions for all trainable layers
-    compound_ce_loss_increase: Optional[torch.Tensor]
+    compound_ce_loss_increase: Optional[Float[Tensor, ""]]
     sae_loss_components: dict[int, SAELossComponents]
-    feature_magnitudes: dict[int, torch.Tensor]
-    reconstructed_activations: dict[int, torch.Tensor]
+    feature_magnitudes: dict[int, Float[Tensor, "batch seq feature_size"]]
+    reconstructed_activations: dict[int, Float[Tensor, "batch seq n_embd"]]
     indices: dict[int, torch.Tensor] = None
     sparsity_losses: dict[int, torch.Tensor] = None # for storing sparsity losses
     aux_losses: dict[int, torch.Tensor] = None # for any other losses
@@ -83,6 +86,69 @@ class SparsifiedGPT(nn.Module):
         assert config.sae_variant != SAEVariant.JSAE, f"JSAE not supported for SparsifiedGPT. See JSparsifiedGPT."
         assert config.sae_variant != SAEVariant.JSAE_BLOCK, f"JSAE_BLOCK not supported for SparsifiedGPT. See JBlockSparsifiedGPT."
         
+    @property
+    def eval_keys(self) -> Union[list[str], list[int]]:
+        return self.saes.keys()
+        
+    def get_sae_logits(self, 
+                       eval_key: int | str,
+                       activations: dict[int, torch.Tensor], 
+                       encoder_outputs: dict[int, EncoderOutput]) -> torch.Tensor:
+        assert isinstance(eval_key, str), "eval_key must be a string for SparsifiedGPT"
+        layer_idx, _ = self.split_sae_key(eval_key)
+        resid = encoder_outputs[eval_key].reconstructed_activations
+        sae_logits = self.gpt.forward(resid, start_at_layer=layer_idx).logits
+        return sae_logits
+
+    @contextmanager
+    def record_activations(self):
+        """
+        Context manager for recording residual stream activations.
+
+        :yield activations: Dictionary of activations.
+        """
+        # Dictionary for storing results
+        activations: dict[int, torch.Tensor] = {}
+
+        # Register hooks
+        hooks = []
+        for layer_idx in list(range(len(self.config.n_features))):
+            target = self.get_hook_target(layer_idx)
+            self.make_cache_pre_hook(hooks, activations, target, key_in = f"{layer_idx}_residmid")
+
+        try:
+            yield activations
+
+        finally:
+            # Unregister hooks
+            for hook in hooks:
+                hook.remove()
+
+    @contextmanager
+    def use_saes(self, activations_to_patch: Iterable[str] = ()):
+        """
+        Context manager for using SAE layers during the forward pass.
+
+        :param activations_to_patch: Layer indices for patching residual stream activations with reconstructions.
+        :yield encoder_outputs: Dictionary of encoder outputs.
+        """
+        # Dictionary for storing results
+        encoder_outputs: dict[int, EncoderOutput] = {}
+
+        # Register hooks
+        hooks = []
+        for layer_idx in self.layer_idxs:
+            target = self.get_hook_target(layer_idx)
+            self.make_sae_pre_hook(hooks, encoder_outputs, target, f"{layer_idx}_{HookPoint.ACT.value}", activations_to_patch)
+
+
+        try:
+            yield encoder_outputs
+
+        finally:
+            # Unregister hooks
+            for hook in hooks:
+                hook.remove()
 
     def forward(
         self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False
@@ -103,19 +169,20 @@ class SparsifiedGPT(nn.Module):
         compound_ce_loss_increase = None
         if is_eval and targets is not None:
             # Calculate cross-entropy loss increase for each SAE layer
-            ce_loss_increases = []
-            for sae_key, output in encoder_outputs.items():
-                resid = output.reconstructed_activations
-                layer_idx, _ = self.split_sae_key(sae_key)
-                sae_logits = self.gpt.forward(resid, start_at_layer=layer_idx).logits
-                sae_ce_loss = F.cross_entropy(sae_logits.view(-1, sae_logits.size(-1)), targets.view(-1))
-                ce_loss_increases.append(sae_ce_loss - cross_entropy_loss)
-            ce_loss_increases = torch.stack(ce_loss_increases)
+            with torch.no_grad():
+                self.eval()
+                ce_loss_increases = []
+                for eval_key in self.eval_keys:
+                    sae_logits = self.get_sae_logits(eval_key, activations, encoder_outputs)
+                    sae_ce_loss = F.cross_entropy(sae_logits.view(-1, sae_logits.size(-1)), targets.view(-1))
+                    ce_loss_increases.append(sae_ce_loss - cross_entropy_loss)
+                ce_loss_increases = torch.stack(ce_loss_increases)
 
-            # Calculate compound cross-entropy loss as a result of patching activations.
-            with self.use_saes(activations_to_patch=self.saes.keys()):
-                _, compound_cross_entropy_loss = self.gpt(idx, targets)
-                compound_ce_loss_increase = compound_cross_entropy_loss - cross_entropy_loss
+                # Calculate compound cross-entropy loss as a result of patching activations.
+                with self.use_saes(activations_to_patch=self.saes.keys()):
+                    _, compound_cross_entropy_loss = self.gpt(idx, targets)
+                    compound_ce_loss_increase = compound_cross_entropy_loss - cross_entropy_loss
+                self.train()
 
         return SparsifiedGPTOutput(
             logits=logits,
@@ -238,57 +305,6 @@ class SparsifiedGPT(nn.Module):
             
         hooks.append(target.register_forward_hook(sae_posthook_fn))
 
-    @contextmanager
-    def record_activations(self):
-        """
-        Context manager for recording residual stream activations.
-
-        :yield activations: Dictionary of activations.
-        """
-        # Dictionary for storing results
-        activations: dict[int, torch.Tensor] = {}
-
-        # Register hooks
-        hooks = []
-        for layer_idx in list(range(len(self.config.n_features))):
-            target = self.get_hook_target(layer_idx)
-            self.make_cache_pre_hook(hooks, activations, target, key_in = f"{layer_idx}_residmid")
-
-        try:
-            yield activations
-
-        finally:
-            # Unregister hooks
-            for hook in hooks:
-                hook.remove()
-
-    @contextmanager
-    def use_saes(self, activations_to_patch: Iterable[str] = ()):
-        """
-        Context manager for using SAE layers during the forward pass.
-
-        :param activations_to_patch: Layer indices for patching residual stream activations with reconstructions.
-        :yield encoder_outputs: Dictionary of encoder outputs.
-        """
-        # Dictionary for storing results
-        encoder_outputs: dict[int, EncoderOutput] = {}
-
-        # Register hooks
-        hooks = []
-        for layer_idx in self.layer_idxs:
-            target = self.get_hook_target(layer_idx)
-            self.make_sae_pre_hook(hooks, encoder_outputs, target, f"{layer_idx}_{HookPoint.ACT.value}", activations_to_patch)
-
-
-        try:
-            yield encoder_outputs
-
-        finally:
-            # Unregister hooks
-            for hook in hooks:
-                hook.remove()
-
-
     def get_hook_target(self, layer_idx) -> nn.Module:
         """
         SAE layer -> Targeted module for forward pre-hook.
@@ -305,10 +321,13 @@ class SparsifiedGPT(nn.Module):
         return cls(config, loss_coefficients, trainable_layers)
 
     @classmethod
-    def load(cls, dir, loss_coefficients=None, trainable_layers=None, device: torch.device = torch.device("cpu")):
+    def load(cls, dir, loss_coefficients=None, trainable_layers=None, device: torch.device | str = torch.device("cpu")):
         """
         Load a sparsified GPT model from a directory.
         """
+        if isinstance(device, str):
+            device = torch.device(device)
+        
         # Load GPT model
         gpt = GPT.load(dir, device=device)
 
@@ -337,29 +356,36 @@ class SparsifiedGPT(nn.Module):
         device = next(self.gpt.lm_head.parameters()).device
         self.gpt = GPT.load(dir, device=device)
 
-    def save(self, dir, layers_to_save: Optional[list[str]] = None):
-        """
-        Save the sparsified GPT model to a directory.
 
-        :param dir: Directory for saving weights.
-        :param layers_to_save: Module names for SAE layers to save. If None, all layers will be saved.
+    def save_meta(self, dir):
         """
-        # Save GPT model
-        self.gpt.save(dir)
-
-        # Save SAE config
+        Save the SAE config to the output directory.
+        """
         meta_path = os.path.join(dir, "sae.json")
         meta = dataclasses.asdict(self.config, dict_factory=SAEConfig.dict_factory)
         with open(meta_path, "w") as f:
             json.dump(meta, f)
 
+    def save(self, dir, sae_keys_to_save: Optional[list[str]] = None):
+        """
+        Save the sparsified GPT model to a directory.
+
+        :param dir: Directory for saving weights.
+        :param sae_keys_to_save: Module names for SAE layers to save. If None, all layers will be saved.
+        """
+        # Save GPT model
+        self.gpt.save(dir)
+        # Save SAE config
+        self.save_meta(dir)
+
         # Which layers should we save?
-        layers_to_save = layers_to_save or list(self.saes.keys())
+        if sae_keys_to_save is None:
+            sae_keys_to_save = list(self.saes.keys())
 
         # Save SAE modules
+        print(f"Saving SAEs: {sae_keys_to_save}")
         for layer_name, module in self.saes.items():
-            if layer_name in layers_to_save:
-                print(f"Saving SAE {layer_name}")
+            if layer_name in sae_keys_to_save:
                 assert isinstance(module, SparseAutoencoder)
                 module.save(Path(dir))
 

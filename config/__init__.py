@@ -41,9 +41,9 @@ class TrainingConfig(Config):
         """
         Checkpoint path
         """
-        return Path(self.checkpoints_dir) / self.name
+        return Path(self.checkpoints_dir) / Path(self.name)
 
-    checkpoints_dir = Path("checkpoints")
+    checkpoints_dir = "checkpoints"
 
 
 ConfigType = TypeVar("ConfigType", bound=Config)

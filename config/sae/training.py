@@ -5,7 +5,7 @@ import torch
 
 from config import TrainingConfig, map_options
 
-from .models import SAEConfig, sae_options
+from config.sae.models import SAEConfig, sae_options
 
 
 @dataclass
@@ -27,8 +27,8 @@ gpt2_defaults = {
     "data_dir": "data/fineweb_edu_10b",
     "eval_interval": 250,
     "eval_steps": 100,
-    "batch_size": 2,
-    "gradient_accumulation_steps": 16,
+    "batch_size": 1,
+    "gradient_accumulation_steps": 32,
     "learning_rate": 5e-4,
     "warmup_steps": 750,
     "max_steps": 5000,
@@ -104,6 +104,22 @@ options: dict[str, SAETrainingConfig] = map_options(
         loss_coefficients=LossCoefficients(),
     ),
     SAETrainingConfig(
+        name="jln.mlpblock.gpt2",
+        sae_config=sae_options["jln.mlpblock.gpt2"],
+        **gpt2_defaults,
+        loss_coefficients=LossCoefficients(
+            sparsity=(0.5)*24,
+        ),
+    ),
+    SAETrainingConfig(
+        name="jsae.mlp_ln.shk_64x4",
+        sae_config=sae_options["jsae.mlp_ln.shk_64x4"],
+        **shakespeare_64x4_defaults,
+        loss_coefficients=LossCoefficients(
+            sparsity=(0.02, 0.02, 0.02, 0.02),
+        ),
+    ),
+    SAETrainingConfig(
         name="staircase.tblock.gpt2",
         sae_config=sae_options["staircase.tblock.gpt2"],
         **gpt2_defaults,
@@ -130,6 +146,12 @@ options: dict[str, SAETrainingConfig] = map_options(
     SAETrainingConfig(
         name="staircase-mlpblock.shk_64x4",
         sae_config=sae_options["staircase-pairsx8.shakespeare_64x4"],
+        **shakespeare_64x4_defaults,
+        loss_coefficients=LossCoefficients(),
+    ),
+    SAETrainingConfig(
+        name="topk.stair.tblock.shk_64x4",
+        sae_config=sae_options["topk-staircase-10-x8-share.shakespeare_64x4"],
         **shakespeare_64x4_defaults,
         loss_coefficients=LossCoefficients(),
     ),
@@ -200,12 +222,7 @@ options: dict[str, SAETrainingConfig] = map_options(
         **shakespeare_64x4_defaults,
         loss_coefficients=LossCoefficients(),
     ),
-    SAETrainingConfig(
-        name="topk-staircase-share.shakespeare_64x4",
-        sae_config=sae_options["topk-staircase-10-x8-share.shakespeare_64x4"],
-        **shakespeare_64x4_defaults,
-        loss_coefficients=LossCoefficients(),
-    ),
+
     SAETrainingConfig(
         name="topk-staircase-detach.shakespeare_64x4",
         sae_config=sae_options["topk-staircase-10-x8-detach.shakespeare_64x4"],
