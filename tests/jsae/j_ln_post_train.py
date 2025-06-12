@@ -100,7 +100,8 @@ mlp_grads = egrad(gpt_mlp.gpt.transformer.h[layer_idx].mlp.gelu, aux['h'])
 
 
 # %%
-
+# breaks as I folded the return scalar into the compiled version so it runs faster
+# but I tested this without
 j_guess = jacobian_mlp_block_ln(
     sae_residmid=gpt_mlp.saes[f'{layer_idx}_{HookPoint.RESID_MID.value}'],
     sae_residpost=gpt_mlp.saes[f'{layer_idx}_{HookPoint.RESID_POST.value}'],
