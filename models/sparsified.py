@@ -354,12 +354,12 @@ class SparsifiedGPT(nn.Module):
         self.gpt = GPT.load(dir, device=device)
 
 
-    def save_meta(self):
+    def save_meta(self, dir):
         """
         Save the SAE config to the output directory.
         """
-        meta_path = os.path.join(self.config.out_dir, "sae.json")
-        meta = dataclasses.asdict(self.config.sae_config, dict_factory=SAEConfig.dict_factory)
+        meta_path = os.path.join(dir, "sae.json")
+        meta = dataclasses.asdict(self.config, dict_factory=SAEConfig.dict_factory)
         with open(meta_path, "w") as f:
             json.dump(meta, f)
 
@@ -373,7 +373,7 @@ class SparsifiedGPT(nn.Module):
         # Save GPT model
         self.gpt.save(dir)
         # Save SAE config
-        self.save_meta()
+        self.save_meta(dir)
 
         # Which layers should we save?
         if sae_keys_to_save is None:

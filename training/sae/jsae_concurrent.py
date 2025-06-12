@@ -29,8 +29,8 @@ class JSaeTrainer(ConcurrentTrainer):
     """
     Train SAE weights for all layers concurrently.
     """
-    def __init__(self, model: JSparsifiedGPT, config: SAETrainingConfig):
-        super().__init__(model, config)
+    def __init__(self, config: SAETrainingConfig, load_from: str | Path):
+        super().__init__(config, load_from)
         self.locs = gen_sae_locations(config.sae_config.sae_variant)
             
     def save_checkpoint(self, model: JSparsifiedGPT, is_best: torch.Tensor):

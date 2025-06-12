@@ -101,6 +101,14 @@ sae_options: dict[str, SAEConfig] = map_options(
         sae_keys=gen_sae_keys(n_features=13, loc="standard"),
     ),
     SAEConfig(
+        name="jln.mlpblock.gpt2",
+        gpt_config = gpt_options['gpt2'],
+        n_features=tuple(768 * n for n in (32,)*24), # 2 per layer, 12 layers
+        sae_variant=SAEVariant.JSAE_BLOCK,
+        top_k = (32,) * 24,
+        sae_keys=gen_sae_keys(n_features=24, loc="mlpblock"),
+    ),
+    SAEConfig(
         name="jsae.mlp_ln.shk_64x4",
         gpt_config = gpt_options['ascii_64x4'],
         n_features=tuple(64 * n for n in (8, 8, 8, 8, 8, 8, 8, 8)),

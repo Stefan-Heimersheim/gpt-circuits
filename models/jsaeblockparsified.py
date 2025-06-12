@@ -66,6 +66,8 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
     def eval_keys(self) -> list[str]:
         return self.layer_idxs
     
+    # torch compiler doesn't like self.gpt.transformer.h[eval_key] for non-constant eval_key
+    @torch.compiler.disable
     @torch.no_grad()
     def get_sae_logits(self,
                        eval_key : str, 
