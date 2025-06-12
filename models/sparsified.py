@@ -321,10 +321,13 @@ class SparsifiedGPT(nn.Module):
         return cls(config, loss_coefficients, trainable_layers)
 
     @classmethod
-    def load(cls, dir, loss_coefficients=None, trainable_layers=None, device: torch.device = torch.device("cpu")):
+    def load(cls, dir, loss_coefficients=None, trainable_layers=None, device: torch.device | str = torch.device("cpu")):
         """
         Load a sparsified GPT model from a directory.
         """
+        if isinstance(device, str):
+            device = torch.device(device)
+        
         # Load GPT model
         gpt = GPT.load(dir, device=device)
 
