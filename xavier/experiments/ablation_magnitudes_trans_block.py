@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# filepath: xavier/experiments/compute_downstream_magnitudes.py
-
 import torch
 import sys
 import os
@@ -31,6 +28,7 @@ from circuits.search.edges import compute_batched_downstream_magnitudes_from_edg
 from xavier.experiments import ExperimentParams, ExperimentResults, ExperimentOutput
 from xavier.utils import create_tokenless_edges_from_array, get_attribution_rankings
 
+# caviar
 
 def main():
     # Parse arguments
@@ -39,10 +37,8 @@ def main():
     parser.add_argument("--upstream-layer-num", type=int, default=0, help="Upstream layer index")
     parser.add_argument("--num-samples", type=int, default=2, help="Number of samples for patching")
     parser.add_argument("--num-prompts", type=int, default=1, help="Number of prompts to use from validation data")
-    parser.add_argument("--edge-selection", type=str, default="random", 
-                        choices=["random", "gradient", "gradient_reversed", "manual_scaled", "manual_pos_scaled", "manual_unscaled"], help="Edge selection strategy")
-    parser.add_argument("--sae-variant", type=str, default="standard", 
-                        choices=["topk-staircase-share", "standard", "top5", "topk", "top20"], help="Type of SAE")
+    parser.add_argument("--edge-selection", type=str, default="random", choices=["random", "gradient"], help="Edge selection strategy")
+    parser.add_argument("--sae-variant", type=str, default="standard", choices=["topk", "staircase", "share", "noshare"], help="Type of SAE")
     parser.add_argument("--run-index", type=str, default="testing", help="Index of the run")
     parser.add_argument("--seed", type=int, default=125, help="Random seed")
     args = parser.parse_args()
@@ -71,10 +67,8 @@ def main():
     print(f"Using device: {device}")
     
     # Setup model paths
-    checkpoint_dir = project_root / "checkpoints"
-    gpt_dir = checkpoint_dir / "shakespeare_64x4"
+    mlp_dir = project_root / "checkpoints" / f"topk-staircase-{sae_variant}.shakespeare_64x4"
     data_dir = project_root / "data"
-    mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
 
     # Load GPT model
     print("Loading GPT model...")
@@ -120,8 +114,8 @@ def main():
     with torch.no_grad():    
         with model.use_saes(activations_to_patch=[upstream_layer_num, upstream_layer_num + 1]) as encoder_outputs:
             _ = model(input_ids)
-            upstream_magnitudes = encoder_outputs[f'{upstream_layer_num}'].feature_magnitudes
-            downstream_magnitudes_full_circuit = encoder_outputs[f'{upstream_layer_num + 1}'].feature_magnitudes
+            upstream_magnitudes = encoder_outputs[f'{upstream_layer_num}_act'].feature_magnitudes
+            downstream_magnitudes_full_circuit = encoder_outputs[f'{upstream_layer_num + 1}_act'].feature_magnitudes
     
     # Create edges
     num_upstream_features = model.config.n_features[upstream_layer_num]
@@ -137,36 +131,10 @@ def main():
         edge_arr = all_edges[:num_edges]
 
     elif edge_selection == "gradient":
-        gradient_dir = project_root / f"SPAR-attributions/{sae_variant}.shakespeare_64x4"
+        gradient_dir = project_root / f"SPAR-attributions/topk-staircase-{sae_variant}.shakespeare_64x4.safetensors"
         tensors = load_file(gradient_dir)
         all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
         edge_arr = all_edges[:num_edges]
-
-    # elif edge_selection == "gradient_reversed":
-    #     gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_igattributions.safetensors"
-    #     tensors = load_file(gradient_dir)
-    #     all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
-    #     edge_arr = all_edges[:num_edges]
-    #     all_edges_reversed = all_edges[::-1]
-    #     edge_arr = all_edges_reversed[:num_edges]
-
-    # elif edge_selection == "manual_scaled":
-    #     gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_manual_ablation_scaled.safetensors"
-    #     tensors = load_file(gradient_dir)
-    #     all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
-    #     edge_arr = all_edges[:num_edges]
-
-    # elif edge_selection == "manual_pos_scaled":
-    #     gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_manual_ablation_pos_scaled.safetensors"
-    #     tensors = load_file(gradient_dir)
-    #     all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
-    #     edge_arr = all_edges[:num_edges]
-
-    # elif edge_selection == "manual_unscaled":
-    #     gradient_dir = project_root / f"Andy/ForXavier/{sae_variant}_manual_ablation_unscaled.safetensors"
-    #     tensors = load_file(gradient_dir)
-    #     all_edges, _ = get_attribution_rankings(tensors[f'{upstream_layer_num}-{upstream_layer_num + 1}'])
-    #     edge_arr = all_edges[:num_edges]
     
     # Create TokenlessEdge objects
     edges = create_tokenless_edges_from_array(edge_arr, upstream_layer_num)
@@ -190,13 +158,13 @@ def main():
         )
 
     # Compute logits subcircuit
-    x_reconstructed = model.saes[str(upstream_layer_num + 1)].decode(downstream_magnitudes) 
+    x_reconstructed = model.saes[f'{upstream_layer_num + 1}_act'].decode(downstream_magnitudes) 
     predicted_logits = model.gpt.forward_with_patched_activations(
         x_reconstructed, layer_idx=upstream_layer_num + 1
     )  # Shape: (num_batches, T, V)
 
     # Compute logits full circuit
-    x_reconstructed_full_circuit = model.saes[str(upstream_layer_num + 1)].decode(downstream_magnitudes_full_circuit) 
+    x_reconstructed_full_circuit = model.saes[f'{upstream_layer_num + 1}_act'].decode(downstream_magnitudes_full_circuit) 
     predicted_logits_full_circuit = model.gpt.forward_with_patched_activations(
         x_reconstructed_full_circuit, layer_idx=upstream_layer_num + 1
     )  # Shape: (num_batches, T, V)
