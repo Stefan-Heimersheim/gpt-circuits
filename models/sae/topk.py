@@ -67,12 +67,13 @@ class TopKBase(nn.Module):
 
         return output
     
-    def resample(self):
-        """
-        Resample biases.
-        """
-        self.b_enc.data = torch.zeros_like(self.b_enc.data)
-        #self.b_dec.data = torch.zeros_like(self.b_dec.data)
+    # Is never used anywhere
+    # def resample(self):
+    #     """
+    #     Resample biases.
+    #     """
+    #     self.b_enc.data = torch.zeros_like(self.b_enc.data)
+    #     #self.b_dec.data = torch.zeros_like(self.b_dec.data)
 
 class TopKSAE(TopKBase, SparseAutoencoder):
     """

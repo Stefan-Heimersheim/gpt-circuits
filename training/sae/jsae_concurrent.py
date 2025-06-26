@@ -47,7 +47,7 @@ class JSaeTrainer(ConcurrentTrainer):
         model.save(self.config.out_dir, sae_keys_to_save)
 
     # TODO: This is a very expensive operation, we should try to speed it up
-    def jacobian_losses(self, output: SparsifiedGPTOutput, is_eval: bool= False) -> torch.Tensor:
+    def raw_jacobian_losses(self, output: SparsifiedGPTOutput, is_eval: bool= False) -> torch.Tensor:
         device = output.sae_losses.device
         jacobian_losses = torch.zeros(len(self.model.layer_idxs), device=device)
          
@@ -98,10 +98,7 @@ class JSaeTrainer(ConcurrentTrainer):
             assert j_loss.ndim == 0, f"Expected scalar tensor for j_loss, got shape {j_loss.shape}"
             jacobian_losses[layer_idx] = j_loss
 
-        j_coeffs = torch.tensor(self.model.loss_coefficients.sparsity, device=device)
-        assert j_coeffs.shape == jacobian_losses.shape,( 
-            f"jsae_concurrent: jacobian_losses.shape: {jacobian_losses.shape}, j_coeffs.shape: {j_coeffs.shape}")
-        return j_coeffs * jacobian_losses
+        return jacobian_losses
 
     # TODO: This is a very expensive operation, we should try to speed it up
     def output_to_loss(self, output: SparsifiedGPTOutput, is_eval: bool= False) -> torch.Tensor:
@@ -115,8 +112,10 @@ class JSaeTrainer(ConcurrentTrainer):
         For JSAE,       (locin, locout) = ("mlpin", "mlpout")
         For JSAE_BLOCK, (locin, locout) = ("residmid", "residpost")
         """
+        device = output.sae_losses.device
+        
         recon_losses = output.sae_losses
-        jacobian_losses = self.jacobian_losses(output, is_eval)
+        jacobian_losses = self.raw_jacobian_losses(output, is_eval) # returns jacobian losses without sparsity coefficient
 
         # Store computed loss components in sparsify output to be read out by gather_metrics
         output.sparsity_losses = jacobian_losses.detach()
@@ -128,7 +127,15 @@ class JSaeTrainer(ConcurrentTrainer):
         pair_losses = einops.rearrange(recon_losses, "(layer pair) -> layer pair", pair=2).sum(dim=-1)
         assert pair_losses.shape == jacobian_losses.shape,(
             f"jsae_concurrent.output_to_loss {pair_losses.shape=}, {jacobian_losses.shape=}")
-        losses = pair_losses + jacobian_losses # (layer)
+        
+        j_coeffs = torch.tensor(self.model.loss_coefficients.sparsity, device=device)
+        assert j_coeffs.shape == jacobian_losses.shape,( 
+            f"jsae_concurrent: jacobian_losses.shape: {jacobian_losses.shape}, j_coeffs.shape: {j_coeffs.shape}")
+        
+        scaled_jacobian_losses = j_coeffs * jacobian_losses # (layer)
+        self.scaled_jacobian_losses = scaled_jacobian_losses.detach()
+        
+        losses = pair_losses + scaled_jacobian_losses # (layer)
         return losses
 
 
@@ -137,7 +144,8 @@ class JSaeTrainer(ConcurrentTrainer):
         Gather metrics from loss and model output.
         """
         metrics =  super().gather_metrics(loss, output)
-        metrics["∇_l1"] = output.sparsity_losses
+        metrics["∇_l1_raw"] = output.sparsity_losses
+        metrics["∇_l1"] = self.scaled_jacobian_losses
         metrics["recon_l2"] = output.recon_losses
 
         return metrics
