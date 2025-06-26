@@ -55,6 +55,13 @@ python -m training.sae.main --config=topk-staircase-share.shakespeare_64x4 --loa
 python -m training.sae.main --config=topk-staircase-noshare.shakespeare_64x4 --load_from=shakespeare_64x4
 ```
 
+To run the Jacobian over MLP Block (including LayerNorm)
+
+```
+python -m training.sae.main --load-from shakespeare_64x4 --config jsae.mlp_ln.shk_64x4 --sparsity 1e-2 
+python -m training.sae.main --load-from gpt2 --config jln.mlpblock.gpt2 --sparsity 1e-6
+```
+
 ### SAE location conventions
 
 SAE keys are of the format `{layer_idx}_{hook_point}`.
