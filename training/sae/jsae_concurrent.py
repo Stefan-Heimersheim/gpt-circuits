@@ -53,7 +53,7 @@ class JSaeTrainer(ConcurrentTrainer):
          
         for layer_idx in self.model.layer_idxs:
             key = self.model.sae_keys[layer_idx]
-            if not "jsae" in self.model.saes[key].config.sae_variant:
+            if not SAEVariant(self.model.saes[key].config.sae_variant).is_jsae():
                 warnings.warn(f"JSaeTrainer: Skipping non-JSAE SAE for layer {layer_idx}")
                 continue
         
@@ -69,7 +69,7 @@ class JSaeTrainer(ConcurrentTrainer):
             sae_in = self.model.saes[f'{layer_idx}_{self.locs.in_loc}']
             sae_out = self.model.saes[f'{layer_idx}_{self.locs.out_loc}']
             
-            if self.config.sae_config.sae_variant == SAEVariant.JSAE:
+            if self.config.sae_config.sae_variant == SAEVariant.JSAE_LAYER:
                 
                 j_loss = jacobian_mlp(sae_in, sae_out, mlp, idx_in, idx_out, mlp_act_grads)
                 

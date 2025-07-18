@@ -2,6 +2,7 @@
 checkpoints/
 checkpoints_gpt2/
 checkpoints_ln/
+checkpoints_mlp_layer/
 david_checkpoint/
 img/
 attributions/

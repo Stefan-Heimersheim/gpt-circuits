@@ -31,7 +31,7 @@ class FactorySparsified(SparsifiedGPT):
              trainable_layers: Optional[list[int]] = None):
         
         match config.sae_variant:
-            case SAEVariant.JSAE:
+            case SAEVariant.JSAE_LAYER:
                 return JSparsifiedGPT(config, loss_coefficients, trainable_layers)
             case SAEVariant.JSAE_BLOCK:
                 return JBlockSparsifiedGPT(config, loss_coefficients, trainable_layers)

@@ -33,7 +33,7 @@ class JSparsifiedGPT(MLPSparsifiedGPT):
         trainable_layers: Optional[tuple] = None,
     ):
         super().__init__(config, loss_coefficients, trainable_layers)
-        if config.sae_variant != SAEVariant.JSAE:
+        if config.sae_variant != SAEVariant.JSAE_LAYER:
             warnings.warn("JSparsifiedGPT: You must use JSAE variant. See JBlockSparsifiedGPT/SparsifiedGPT for other variants.")
     
     @property

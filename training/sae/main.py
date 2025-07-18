@@ -16,7 +16,7 @@ from training.sae.jsae_concurrent import JSaeTrainer
 def get_trainer_class(sae_variant: SAEVariant) -> type:
     return {
         SAEVariant.JSAE_BLOCK: JSaeTrainer,
-        SAEVariant.JSAE: JSaeTrainer,
+        SAEVariant.JSAE_LAYER: JSaeTrainer,
         SAEVariant.STAIRCASE_BLOCK: StaircaseConcurrentTrainer,
         SAEVariant.TOPK_STAIRCASE: StaircaseConcurrentTrainer,
         SAEVariant.TOPK_STAIRCASE_DETACH: StaircaseConcurrentTrainer,
@@ -115,7 +115,7 @@ def apply_overrides(args: Args, config: SAETrainingConfig):
     if args.sparsity:
         vals = list(map(float, args.sparsity.split(",")))
         variant = config.sae_config.sae_variant
-        n = len(config.sae_config.top_k) // 2 if variant in {SAEVariant.JSAE, SAEVariant.JSAE_BLOCK} else len(config.sae_config.n_features)
+        n = len(config.sae_config.top_k) // 2 if variant in {SAEVariant.JSAE_LAYER, SAEVariant.JSAE_BLOCK} else len(config.sae_config.n_features)
         if len(vals) == 1:
             sparsity = (vals[0],) * n
         elif len(vals) == n:

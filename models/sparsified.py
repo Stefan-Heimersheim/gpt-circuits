@@ -83,7 +83,7 @@ class SparsifiedGPT(nn.Module):
         if self.config.sae_keys is None:
             self.config.sae_keys = tuple(self.saes.keys())
         
-        assert config.sae_variant != SAEVariant.JSAE, f"JSAE not supported for SparsifiedGPT. See JSparsifiedGPT."
+        assert config.sae_variant != SAEVariant.JSAE_LAYER, f"JSAE not supported for SparsifiedGPT. See JSparsifiedGPT."
         assert config.sae_variant != SAEVariant.JSAE_BLOCK, f"JSAE_BLOCK not supported for SparsifiedGPT. See JBlockSparsifiedGPT."
         
     @property
@@ -412,7 +412,7 @@ class SparsifiedGPT(nn.Module):
                 return StaircaseTopKSAE
             case SAEVariant.TOPK_STAIRCASE_DETACH:
                 return StaircaseTopKSAEDetach
-            case SAEVariant.JSAE:
+            case SAEVariant.JSAE_LAYER:
                 return TopKSAE
             case SAEVariant.JSAE_BLOCK:
                 return TopKSAE

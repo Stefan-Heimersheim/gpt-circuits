@@ -74,6 +74,8 @@ def main():
     data_dir = project_root / "data"
 
     # Hacky fix for loading the model
+    # TODO: Use SAEVariant instead of strings. -David
+    # from config.sae.models import SAEVariant
     if sae_variant == "mlp-topk":
         mlp_dir = checkpoint_dir / f"{sae_variant}.shakespeare_64x4"
     elif sae_variant == "jsae":

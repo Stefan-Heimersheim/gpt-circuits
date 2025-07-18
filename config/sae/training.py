@@ -156,14 +156,14 @@ options: dict[str, SAETrainingConfig] = map_options(
         loss_coefficients=LossCoefficients(),
     ),
     
+    # SAETrainingConfig(
+    #     name="mlp-topk.shakespeare_64x4",
+    #     sae_config=sae_options["mlp.topkx8.shakespeare_64x4"],
+    #     **shakespeare_64x4_defaults,
+    #     loss_coefficients=LossCoefficients(),
+    # ),
     SAETrainingConfig(
-        name="mlp-topk.shakespeare_64x4",
-        sae_config=sae_options["mlp.topkx8.shakespeare_64x4"],
-        **shakespeare_64x4_defaults,
-        loss_coefficients=LossCoefficients(),
-    ),
-    SAETrainingConfig(
-        name="jsae.shakespeare_64x4",
+        name="jsae.mlp_layer.shk_64x4",
         sae_config=sae_options["jsae.topkx8.shakespeare_64x4"],
         **shakespeare_64x4_defaults,
         loss_coefficients=LossCoefficients(

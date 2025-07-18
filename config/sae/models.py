@@ -5,6 +5,7 @@ from typing import Literal, Optional
 from config import Config, map_options
 from config.gpt.models import GPTConfig, gpt_options
 from collections import namedtuple
+import warnings
 
 class HookPoint(str, Enum):
     RESID_PRE = "act"
@@ -32,16 +33,21 @@ class SAEVariant(str, Enum):
     TOPK = "topk"
     TOPK_STAIRCASE = "topk_staircase"
     TOPK_STAIRCASE_DETACH = "topk_staircase_detach"
-    JSAE = "jsae"
+    JSAE = "jsae_layer" # deprecated. Don't use this.
+    JSAE_LAYER = "jsae_layer"
     JSAE_BLOCK = "jsae_block"
     STAIRCASE_BLOCK = "staircase_block"
+    
+    def is_jsae(self) -> bool:
+        """Check if this variant is a JSAE type."""
+        return self in {SAEVariant.JSAE, SAEVariant.JSAE_LAYER, SAEVariant.JSAE_BLOCK}
     
 
 
 SAELocations = namedtuple('SAELocations', ['in_loc', 'out_loc'])
 
 location_map: dict[SAEVariant, SAELocations] = {
-    SAEVariant.JSAE: SAELocations(HookPoint.MLP_IN.value, HookPoint.MLP_OUT.value),
+    SAEVariant.JSAE_LAYER: SAELocations(HookPoint.MLP_IN.value, HookPoint.MLP_OUT.value),
     SAEVariant.JSAE_BLOCK: SAELocations(HookPoint.RESID_MID.value, HookPoint.RESID_POST.value),
 }
 
@@ -60,6 +66,11 @@ class SAEConfig(Config):
     sae_variant: SAEVariant = SAEVariant.STANDARD
     top_k: Optional[tuple[int, ...]] = None  # Required for topk variant
     sae_keys: Optional[tuple[str, ...]] = None
+    deprecated: Optional[str] = None
+
+    def __post_init__(self):
+        if self.deprecated is not None:
+            warnings.warn(self.deprecated, DeprecationWarning, stacklevel=2)
 
     @property
     def block_size(self) -> int:
@@ -164,18 +175,19 @@ sae_options: dict[str, SAEConfig] = map_options(
         sae_keys=gen_sae_keys(n_features=8, loc="mlpblock"),
     ),
     SAEConfig(
-        name="mlp.topkx8.shakespeare_64x4",
+        name="mlp_layer.topkx8.shakespeare_64x4",
         gpt_config=gpt_options["ascii_64x4"],
         n_features=tuple(64 * n for n in (8, 8, 8, 8, 8, 8, 8, 8)),
         sae_variant=SAEVariant.TOPK,
         top_k=(10, 10, 10, 10, 10, 10, 10, 10),
         sae_keys=gen_sae_keys(n_features=8, loc="mlplayer"),
+        deprecated="Use 'topk.mlplayer.shakespeare_64x4' instead",
     ),
     SAEConfig(
         name="jsae.topkx8.shakespeare_64x4",
         gpt_config=gpt_options["ascii_64x4"],
         n_features=tuple(64 * n for n in (8, 8, 8, 8, 8, 8, 8, 8)),
-        sae_variant=SAEVariant.JSAE,
+        sae_variant=SAEVariant.JSAE_LAYER,
         top_k=(10, 10, 10, 10, 10, 10, 10, 10),
         sae_keys=gen_sae_keys(n_features=8, loc="mlplayer"),
     ),

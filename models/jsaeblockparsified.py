@@ -97,12 +97,12 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
             
             self.make_cache_post_hook(hooks, act, block, key_out = f"{layer_idx}_{HookPoint.RESID_POST.value}")
             
-            if "jsae" in self.config.sae_variant:       
+            if SAEVariant(self.config.sae_variant).is_jsae():       
                 self.make_grad_hook(hooks, act, block.mlp.gelu, key = f"{layer_idx}_{HookPoint.MLP_ACT_GRAD.value}")
             # Adding two hooks is okay, will execute in order
             self.make_cache_pre_hook(hooks, act, block.ln_2, key_in = f"{layer_idx}_{HookPoint.RESID_MID.value}") 
             
-            if "jsae" in self.config.sae_variant:
+            if SAEVariant(self.config.sae_variant).is_jsae():
                 if self.norm_strategy == NormalizationStrategy.DYNAMIC_TANH:
                     self.make_grad_hook(hooks, act, block.ln_2, key = f"{layer_idx}_{HookPoint.DYT_ACT_GRAD.value}")
                 

@@ -52,7 +52,7 @@ class Attributor():
         #This is a mess. Fix later
         if model.config.sae_variant in [SAEVariant.JSAE_BLOCK, SAEVariant.STAIRCASE_BLOCK]:
             self.paths = PathType.MLP_LAYER
-        elif model.config.sae_variant in [SAEVariant.JSAE]:
+        elif model.config.sae_variant in [SAEVariant.JSAE_LAYER, SAEVariant.JSAE]:
             self.paths = PathType.MLP
         else:  
             self.paths = PathType.BLOCK
