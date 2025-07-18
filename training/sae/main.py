@@ -138,7 +138,8 @@ if __name__ == "__main__":
     checkpoint_base = args.checkpoint_dir if args.checkpoint_dir else TrainingConfig.checkpoints_dir
     load_path = Path(checkpoint_base) / Path(args.load_from)
     trainer = trainer_class(config, load_from=load_path)
-
+    trainer.config.checkpoints_dir = checkpoint_base
+    
     if isinstance(trainer, JSaeTrainer):
         print(f"{trainer.model.saes.keys()=}")
         print(f"{trainer.model.layer_idxs=}")
