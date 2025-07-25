@@ -179,7 +179,7 @@ sae_options: dict[str, SAEConfig] = map_options(
         gpt_config=gpt_options['gpt2'],
         n_features=tuple(768 * n for n in 13*(32,64)),
         sae_variant=SAEVariant.STAIRCASE_BLOCK,
-        top_k = (32,) * 13,
+        top_k = (32,32) * 13,
         sae_keys=gen_sae_keys(n_features=13, loc="mlpblock"),
     ),
     SAEConfig(
