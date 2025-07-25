@@ -87,10 +87,10 @@ class SAEConfig(Config):
 def gen_sae_keys(n_features: int, loc : Literal["mlplayer", "mlpblock", "standard"] = 'standard') -> tuple[str, ...]:
     match loc:
         case "mlplayer":
-            assert n_features % 2 == 0, "n_features must be even for mlpplayer"
+            assert n_features % 2 == 0, "n_features must be even for mlpplayer: " + str(n_features)
             return tuple(f"{x}_{y}" for x in range(n_features//2) for y in [HookPoint.MLP_IN.value, HookPoint.MLP_OUT.value])
         case "mlpblock":
-            assert n_features % 2 == 0, "n_features must be even for mlpblock"
+            assert n_features % 2 == 0, "n_features must be even for mlpblock: " + str(n_features)
             return tuple(f"{x}_{y}" for x in range(n_features//2) for y in [HookPoint.RESID_MID.value, HookPoint.RESID_POST.value])
         case _:
             # assume we're using the activations between the transformer blocks
@@ -180,7 +180,7 @@ sae_options: dict[str, SAEConfig] = map_options(
         n_features=tuple(768 * n for n in 13*(32,64)),
         sae_variant=SAEVariant.STAIRCASE_BLOCK,
         top_k = (32,32) * 13,
-        sae_keys=gen_sae_keys(n_features=13, loc="mlpblock"),
+        sae_keys=gen_sae_keys(n_features=26, loc="mlpblock"),
     ),
     SAEConfig(
         name="mlp_layer.topkx8.shakespeare_64x4",
