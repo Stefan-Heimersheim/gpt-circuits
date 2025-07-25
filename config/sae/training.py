@@ -126,6 +126,12 @@ options: dict[str, SAETrainingConfig] = map_options(
         loss_coefficients=LossCoefficients(),
     ),
     SAETrainingConfig(
+        name = "staircase.mlpblock.gpt2",
+        sae_config=sae_options["staircase.mlpblock.gpt2"],
+        **gpt2_defaults,
+        loss_coefficients=LossCoefficients(),
+    ),
+    SAETrainingConfig(
         name="topk.mlplayer.shk_64x4",
         sae_config=sae_options["topk.mlplayer.shakespeare_64x4"],
         **shakespeare_64x4_defaults,
