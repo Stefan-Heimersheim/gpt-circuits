@@ -177,10 +177,10 @@ sae_options: dict[str, SAEConfig] = map_options(
     SAEConfig(
         name="staircase.mlpblock.gpt2",
         gpt_config=gpt_options['gpt2'],
-        n_features=tuple(768 * n for n in 13*(32,64)),
+        n_features=tuple(768 * n for n in 12*(32,64)),
         sae_variant=SAEVariant.STAIRCASE_BLOCK,
-        top_k = (32,32) * 13,
-        sae_keys=gen_sae_keys(n_features=26, loc="mlpblock"),
+        top_k = (32,) * 24,
+        sae_keys=gen_sae_keys(n_features=24, loc="mlpblock"),
     ),
     SAEConfig(
         name="mlp_layer.topkx8.shakespeare_64x4",
