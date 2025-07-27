@@ -123,6 +123,50 @@ def patch_feature_magnitudes(
     return patched_feature_magnitudes
 
 
+def patch_feature_magnitudes_memory_efficient(
+    ablator: ResampleAblator,
+    layer_idx: int,
+    target_token_idx: int,
+    circuit_variants: Sequence[Circuit],
+    feature_magnitudes: torch.Tensor,  # Shape: (T, F)
+    num_samples: int,
+) -> dict[Circuit, torch.Tensor]:  # Shape: (num_samples, T, F)
+    """
+    Memory-efficient version of patch_feature_magnitudes that processes circuit variants sequentially.
+    This reduces peak memory usage by not using ThreadPoolExecutor which can accumulate memory.
+    """
+    # For mapping variants to patched feature magnitudes
+    patched_feature_magnitudes: dict[Circuit, torch.Tensor] = {}
+
+    # Patch feature magnitudes for each variant sequentially
+    for circuit_variant in circuit_variants:
+        # Create feature mask
+        feature_mask = torch.zeros_like(feature_magnitudes, dtype=torch.bool)
+        layer_nodes = [n for n in circuit_variant.nodes if n.layer_idx == layer_idx]
+        if layer_nodes:
+            token_indices = torch.tensor([node.token_idx for node in layer_nodes])
+            feature_indices = torch.tensor([node.feature_idx for node in layer_nodes])
+            feature_mask[token_indices, feature_indices] = True
+        
+        # Patch feature magnitudes
+        patched_magnitudes = ablator.patch(
+            layer_idx=layer_idx,
+            target_token_idx=target_token_idx,
+            feature_magnitudes=feature_magnitudes,
+            feature_mask=feature_mask,
+            num_samples=num_samples,
+        )
+        
+        patched_feature_magnitudes[circuit_variant] = patched_magnitudes
+        
+        # Clear intermediate tensors to free memory
+        del feature_mask
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+    # Return patched feature magnitudes
+    return patched_feature_magnitudes
+
+
 @torch.no_grad()
 def get_predicted_logits(
     model: SparsifiedGPT,
@@ -348,5 +392,45 @@ def compute_downstream_magnitudes_resid(
 
         # Store results
         results[circuit_variant] = downstream_feature_magnitudes
+
+    return results
+
+
+@torch.no_grad()
+def compute_downstream_magnitudes_resid_memory_efficient(
+    model: FactorySparsified,
+    layer_idx: int,
+    patched_feature_magnitudes: dict[Circuit, torch.Tensor],  # Shape: (num_samples, T, F)
+    include_nonlinearity: bool = True,
+) -> dict[Circuit, torch.Tensor]:  # Shape: (num_sample, T, F)
+    """
+    Memory-efficient version of compute_downstream_magnitudes_resid that processes circuit variants one at a time.
+    This reduces peak memory usage by not storing all intermediate results simultaneously.
+    """
+    results: dict[Circuit, torch.Tensor] = {}
+
+    # Process circuit variants one at a time to minimize memory usage
+    for circuit_variant, feature_magnitudes in patched_feature_magnitudes.items():
+        # Reconstruct activations
+        block = model.gpt.transformer.h[layer_idx]
+        x_reconstructed = model.saes[f'{layer_idx}_residmid'].decode(feature_magnitudes)  # type: ignore
+        
+        # Compute downstream activations, i.e., residpost
+        x_downstream = block.mlp(block.ln_2(x_reconstructed)) + x_reconstructed
+
+        # Encode to get feature magnitudes
+        downstream_sae = model.saes[f'{layer_idx}_residpost']
+        if include_nonlinearity:
+            downstream_feature_magnitudes = downstream_sae(x_downstream).feature_magnitudes  # Shape: (num_sample, T, F)
+        else:
+            # Encode activations 'by hand' to get feature magnitudes
+            downstream_feature_magnitudes = (x_downstream - downstream_sae.b_dec) @ downstream_sae.W_enc + downstream_sae.b_enc
+
+        # Store results
+        results[circuit_variant] = downstream_feature_magnitudes
+        
+        # Clear intermediate tensors to free memory
+        del x_reconstructed, x_downstream
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
     return results

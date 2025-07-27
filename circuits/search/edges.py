@@ -2,6 +2,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import torch
+from tqdm import tqdm
 
 from circuits import Circuit, Edge, Node, TokenlessEdge, TokenlessNode
 from circuits.features.profiles import ModelProfile
@@ -10,7 +11,9 @@ from circuits.search.divergence import (
     compute_downstream_magnitudes,
     compute_downstream_magnitudes_mlp,
     compute_downstream_magnitudes_resid,
+    compute_downstream_magnitudes_resid_memory_efficient,
     patch_feature_magnitudes,
+    patch_feature_magnitudes_memory_efficient,
 )
 from models.sparsified import SparsifiedGPT, SparsifiedGPTOutput
 from models.mlpsparsified import MLPSparsifiedGPT
@@ -702,4 +705,143 @@ def compute_batched_downstream_magnitudes_from_edges_resid(
 
     # Normalization?
     
+    return torch.stack(result_list)
+
+
+def compute_batched_downstream_magnitudes_from_edges_resid_memory_efficient(
+    model: FactorySparsified,
+    ablator: ResampleAblator,
+    edges: frozenset[TokenlessEdge],
+    upstream_magnitudes: torch.Tensor,  # Shape: (num_batches, T, F)
+    target_token_idx: int,
+    num_samples: int = 2,
+    chunk_size: int = 20
+) -> torch.Tensor: # Shape: (num_batches, T, F)
+    """
+    Memory-efficient version of compute_batched_downstream_magnitudes_from_edges_resid.
+    Processes multiple batches of upstream magnitudes in parallel with memory-efficient chunking.
+    
+    :param model: Model to use for computation
+    :param ablator: ResampleAblator to use for patching
+    :param edges: Circuit edges defining connections from layer L to layer L+1
+    :param upstream_magnitudes: Upstream feature magnitudes tensor from layer L
+    :param target_token_idx: Target token index
+    :param num_samples: Number of samples for patching
+    :param chunk_size: Number of dependency sets to process in each chunk (smaller = less memory usage)
+    :returns: Downstream feature magnitudes tensor at layer L+1
+    """
+    # Extract all downstream nodes from edges
+    downstream_nodes = frozenset({edge.downstream for edge in edges})
+    
+    # Map downstream nodes to upstream dependencies
+    tokenless_node_to_dependencies: dict[TokenlessNode, frozenset[TokenlessNode]] = {}
+    for node in tqdm(downstream_nodes, desc="Mapping downstream nodes to dependencies", unit="node"):
+        tokenless_node_to_dependencies[node] = frozenset({edge.upstream for edge in edges if edge.downstream == node})
+    dependencies_to_tokenless_nodes: dict[frozenset[TokenlessNode], set[TokenlessNode]] = defaultdict(set)
+    for node, dependencies in tqdm(tokenless_node_to_dependencies.items(), desc="Grouping nodes by dependencies", unit="node"):
+        dependencies_to_tokenless_nodes[dependencies].add(node)
+
+    # Create a bidirectional mapping between dependencies (TokenlessNodes) and expanded dependencies (Nodes)
+    expanded_dependencies = bidict({dependencies: expand_token_index(dependencies, target_token_idx) for dependencies in dependencies_to_tokenless_nodes.keys()})
+
+    num_batches = upstream_magnitudes.shape[0]
+    result_list = []
+
+    # Loop over batches
+    for i in range(num_batches):
+        print(f"Processing batch {i+1}/{num_batches}")
+        
+        upstream_layer_idx = next(iter(downstream_nodes)).layer_idx - 1
+        
+        # Create a downstream circuit with all nodes and compute downstream magnitudes (only once per batch)
+        dummy_circuit = Circuit(nodes=frozenset())
+        dummy_downstream = compute_downstream_magnitudes_resid(  # Shape: (num_samples, T, F)
+            model,
+            upstream_layer_idx,
+            {dummy_circuit: upstream_magnitudes[i].unsqueeze(0)}
+        )
+        dummy_downstream_magnitudes = dummy_downstream[dummy_circuit].squeeze(0)
+
+        # Initialize the result tensor as the patched downstream magnitudes
+        empty_circuit = Circuit(nodes=frozenset())
+        patched_downstream_magnitudes = patch_feature_magnitudes_memory_efficient(  # Shape: (num_samples, T, F)
+            ablator,
+            upstream_layer_idx,
+            target_token_idx,
+            [empty_circuit],
+            dummy_downstream_magnitudes,
+            num_samples=num_samples,
+        )
+        result = patched_downstream_magnitudes[empty_circuit][0]
+
+        # Process circuit variants in smaller chunks to reduce memory usage
+        include_nonlinearity = False if model.config.top_k else True
+        
+        # Get all unique dependency sets
+        unique_dependencies = list(dependencies_to_tokenless_nodes.keys())
+        num_dependencies = len(unique_dependencies)
+        
+        print(f"Processing {num_dependencies} unique dependency sets in chunks of {chunk_size}")
+        
+        # Process dependency sets in chunks
+        for chunk_start in range(0, num_dependencies, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, num_dependencies)
+            chunk_dependencies = unique_dependencies[chunk_start:chunk_end]
+            chunk_num = chunk_start // chunk_size + 1
+            total_chunks = (num_dependencies + chunk_size - 1) // chunk_size
+            
+            print(f"Processing chunk {chunk_num}/{total_chunks} (dependencies {chunk_start+1}-{chunk_end})")
+            
+            # Create circuit variants for this chunk
+            chunk_circuit_variants = [Circuit(nodes=expanded_dependencies[deps]) for deps in chunk_dependencies]
+            
+            # Patch upstream feature magnitudes for this chunk
+            chunk_patched_upstream_magnitudes = patch_feature_magnitudes_memory_efficient(  # Shape: (num_samples, T, F)
+                ablator,
+                upstream_layer_idx,
+                target_token_idx,
+                chunk_circuit_variants,
+                upstream_magnitudes[i],
+                num_samples=num_samples,
+            )
+
+            # Compute downstream feature magnitudes for this chunk
+            chunk_sampled_downstream_magnitudes = compute_downstream_magnitudes_resid_memory_efficient(  # Shape: (num_samples, T, F)
+                model,
+                upstream_layer_idx,
+                chunk_patched_upstream_magnitudes,
+                include_nonlinearity
+            )
+            
+            # Update result tensor with computed values from this chunk
+            for circuit_variant, magnitudes in chunk_sampled_downstream_magnitudes.items():
+                # Find which dependency set this circuit variant corresponds to
+                for deps in chunk_dependencies:
+                    if expanded_dependencies[deps] == circuit_variant.nodes:
+                        # Update result for all downstream nodes that depend on this dependency set
+                        for node in dependencies_to_tokenless_nodes[deps]:
+                            node_sampled_magnitudes = magnitudes[:, :target_token_idx+1, node.feature_idx]
+                            # Average over num_samples
+                            result[:target_token_idx+1, node.feature_idx] = torch.mean(node_sampled_magnitudes, dim=0)
+                        break
+            
+            # Clear chunk memory to free up space
+            del chunk_patched_upstream_magnitudes
+            del chunk_sampled_downstream_magnitudes
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+        # Apply top_k if specified
+        if model.config.top_k:
+            # Zero out all but the top-k activations
+            top_k_values, _ = torch.topk(result, k=model.config.top_k[2*upstream_layer_idx+1], dim=-1)
+            mask = result >= top_k_values[..., -1].unsqueeze(-1)
+            result = result * mask.float()
+        
+        result_list.append(result)
+        
+        # Clear batch memory
+        del dummy_downstream_magnitudes
+        del patched_downstream_magnitudes
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
     return torch.stack(result_list)
