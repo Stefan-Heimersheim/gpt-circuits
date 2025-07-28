@@ -151,7 +151,7 @@ class SparsifiedGPT(nn.Module):
                 hook.remove()
 
     def forward(
-        self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False
+        self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False, stop_at_layer: Optional[int] = None
     ) -> SparsifiedGPTOutput:
         """
         Forward pass of the sparsified model.
@@ -159,10 +159,30 @@ class SparsifiedGPT(nn.Module):
         :param idx: Input tensor.
         :param targets: Target tensor.
         :param is_eval: Whether the model is in evaluation mode.
+        :param stop_at_layer: Optional layer index to stop the forward pass at. Exclusive.
+                              If specified, returns early with limited output. Defaults to None (run full model).
         """
         with self.record_activations() as activations:
             with self.use_saes() as encoder_outputs:
-                logits, cross_entropy_loss = self.gpt(idx, targets)
+                gpt_output = self.gpt(idx, targets, stop_at_layer=stop_at_layer)
+                
+                # Handle early termination case
+                if stop_at_layer is not None:
+                    # GPT returns just the residual stream tensor when stop_at_layer is used
+                    return SparsifiedGPTOutput(
+                        logits=None,  # No logits when stopping early
+                        cross_entropy_loss=None,  # No loss when stopping early
+                        activations=activations,
+                        ce_loss_increases=None,
+                        compound_ce_loss_increase=None,
+                        sae_loss_components={i: output.loss for i, output in encoder_outputs.items() if output.loss},
+                        feature_magnitudes={i: output.feature_magnitudes for i, output in encoder_outputs.items()},
+                        reconstructed_activations={i: output.reconstructed_activations for i, output in encoder_outputs.items()},
+                        indices={i: output.indices for i, output in encoder_outputs.items()},
+                    )
+                
+                # Normal case - GPT returns GPTOutput(logits, loss)
+                logits, cross_entropy_loss = gpt_output
 
         # If targets are provided during training evaluation, gather more metrics
         ce_loss_increases = None
