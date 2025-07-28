@@ -1,0 +1,9 @@
+CUDA_VISIBLE_DEVICES=0 python Andy/compute_attributions.py --load_from=checkpoints/jln.mlpblock.gpt2-sparse-0.0ep00 --save_to=Andy/data --data_dir=data/fineweb_edu_10b --save_name=jln.mlpblock.gpt2-sparse-0.0ep00 --num_batches=8 --batch_size=12 --steps=1 --attribution_method=ig --layers=1
+ON GPU 0
+CUDA_VISIBLE_DEVICES=1 python Andy/compute_attributions.py --load_from=checkpoints/jln.mlpblock.gpt2-sparse-1.0e-08 --save_to=Andy/data --data_dir=data/fineweb_edu_10b --save_name=jln.mlpblock.gpt2-sparse-1.0e-08 --num_batches=8 --batch_size=12 --steps=1 --attribution_method=ig --layers=1
+ON GPU 1
+CUDA_VISIBLE_DEVICES=2 python Andy/compute_attributions.py --load_from=checkpoints/sc.mlpblock.gpt2.k32.x32 --save_to=Andy/data --data_dir=data/fineweb_edu_10b --save_name=sc.mlpblock.gpt2.k32.x32 --num_batches=8 --batch_size=12 --steps=1 --attribution_method=ig --layers=1
+ON GPU 2
+CUDA_VISIBLE_DEVICES=3 python Andy/compute_attributions.py --load_from=checkpoints/jln.mlpblock.gpt2-sparse-5.0e-01 --save_to=Andy/data --data_dir=data/fineweb_edu_10b --save_name=jln.mlpblock.gpt2-sparse-5.0e-01 --num_batches=8 --batch_size=12 --steps=1 --attribution_method=ig --layers=1
+ON GPU 3
+

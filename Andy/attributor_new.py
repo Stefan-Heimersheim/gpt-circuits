@@ -315,22 +315,63 @@ class Attributor():
             sae0 = base_model.saes[f'{layer0}_act']
             sae1 = base_model.saes[f'{layer1}_act']
             
+            # Get the primary device
+            primary_device = self.device_ids[0] if self.device_ids else base_model.gpt.config.device
+            
             # define function that goes from feature magnitudes in layer0 to feature magnitudes in layer1
             class Sae0Decode(nn.Module):
+                def __init__(self, sae, device):
+                    super().__init__()
+                    self.sae = sae
+                    self.device = device
+                    
                 def forward(self, x):
-                    return sae0.decode(x)
+                    # Ensure SAE decode happens on the correct device
+                    return self.sae.decode(x)
                 
             class Sae1Encode(nn.Module):
+                def __init__(self, sae, device):
+                    super().__init__()
+                    self.sae = sae
+                    self.device = device
+                    
                 def forward(self, x):
-                    return sae1.encode(x)
+                    # Ensure SAE encode happens on the correct device
+                    return self.sae.encode(x)
 
             # construct function from Sae0 to Sae1
-            forward_list = [Sae0Decode()] + [base_model.gpt.transformer.h[i] for i in range(layer0, layer1)] + [Sae1Encode()]
-            forward = t.nn.Sequential(*forward_list)
+            # Keep SAE operations on primary device, only parallelize the middle layers
+            sae0_decode = Sae0Decode(sae0, primary_device)
+            sae1_encode = Sae1Encode(sae1, primary_device)
             
-            # Wrap in DataParallel if using multiple GPUs
+            # Only wrap the transformer layers in DataParallel, not the SAE operations
+            middle_layers = nn.Sequential(*[base_model.gpt.transformer.h[i] for i in range(layer0, layer1)])
+            
             if len(self.device_ids) > 1 and not self.use_ddp:
-                forward = DataParallel(forward, device_ids=self.device_ids)
+                # Only parallelize the middle transformer layers
+                middle_layers = DataParallel(middle_layers, device_ids=self.device_ids)
+            
+            # Create the full forward path with SAE operations on primary device
+            class ForwardPath(nn.Module):
+                def __init__(self, sae0_decode, middle_layers, sae1_encode, primary_device):
+                    super().__init__()
+                    self.sae0_decode = sae0_decode
+                    self.middle_layers = middle_layers
+                    self.sae1_encode = sae1_encode
+                    self.primary_device = primary_device
+                
+                def forward(self, x):
+                    # Decode on primary device
+                    x = self.sae0_decode(x)
+                    # Run through middle layers (potentially parallelized)
+                    x = self.middle_layers(x)
+                    # Move back to primary device if necessary and encode
+                    if x.device != self.primary_device:
+                        x = x.to(self.primary_device)
+                    x = self.sae1_encode(x)
+                    return x
+            
+            forward = ForwardPath(sae0_decode, middle_layers, sae1_encode, primary_device)
                 
             return forward, sae0, sae1
 
@@ -340,20 +381,54 @@ class Attributor():
             if self.verbose:
                 print(f'Indexing SAEs for computation path by {layer0}_mlpin and {layer0}_mlpout')
             
+            # Get the primary device
+            primary_device = self.device_ids[0] if self.device_ids else base_model.gpt.config.device
+            
             class Sae0Decode(nn.Module):
+                def __init__(self, sae, device):
+                    super().__init__()
+                    self.sae = sae
+                    self.device = device
+                    
                 def forward(self, x):
-                    return sae0.decode(x)
+                    return self.sae.decode(x)
                 
             class Sae1Encode(nn.Module):
+                def __init__(self, sae, device):
+                    super().__init__()
+                    self.sae = sae
+                    self.device = device
+                    
                 def forward(self, x):
-                    return sae1.encode(x)
+                    return self.sae.encode(x)
 
-            forward_list = [Sae0Decode(), base_model.gpt.transformer.h[layer0].mlp, Sae1Encode()]
-            forward = t.nn.Sequential(*forward_list)
+            sae0_decode = Sae0Decode(sae0, primary_device)
+            sae1_encode = Sae1Encode(sae1, primary_device)
             
-            # Wrap in DataParallel if using multiple GPUs
+            # Only the MLP layer can be parallelized
+            mlp_layer = base_model.gpt.transformer.h[layer0].mlp
+            
             if len(self.device_ids) > 1 and not self.use_ddp:
-                forward = DataParallel(forward, device_ids=self.device_ids)
+                mlp_layer = DataParallel(mlp_layer, device_ids=self.device_ids)
+            
+            # Create the full forward path
+            class ForwardPath(nn.Module):
+                def __init__(self, sae0_decode, mlp_layer, sae1_encode, primary_device):
+                    super().__init__()
+                    self.sae0_decode = sae0_decode
+                    self.mlp_layer = mlp_layer
+                    self.sae1_encode = sae1_encode
+                    self.primary_device = primary_device
+                
+                def forward(self, x):
+                    x = self.sae0_decode(x)
+                    x = self.mlp_layer(x)
+                    if x.device != self.primary_device:
+                        x = x.to(self.primary_device)
+                    x = self.sae1_encode(x)
+                    return x
+            
+            forward = ForwardPath(sae0_decode, mlp_layer, sae1_encode, primary_device)
                 
             return forward, sae0, sae1
 
@@ -363,23 +438,56 @@ class Attributor():
             sae0 = base_model.saes[f'{layer0}_residmid']
             sae1 = base_model.saes[f'{layer0}_residpost']
             
+            # Get the primary device
+            primary_device = self.device_ids[0] if self.device_ids else base_model.gpt.config.device
+            
             class Sae0Decode(nn.Module):
+                def __init__(self, sae, device):
+                    super().__init__()
+                    self.sae = sae
+                    self.device = device
+                    
                 def forward(self, x):
-                    return sae0.decode(x)
+                    return self.sae.decode(x)
                 
             class Sae1Encode(nn.Module):
+                def __init__(self, sae, device):
+                    super().__init__()
+                    self.sae = sae
+                    self.device = device
+                    
                 def forward(self, x):
-                    return sae1.encode(x)
+                    return self.sae.encode(x)
 
-            skip_list = [base_model.gpt.transformer.h[layer0].ln_2, base_model.gpt.transformer.h[layer0].mlp]
-            skip = t.nn.Sequential(*skip_list)
-            skip_path = SkipModule(skip)
-            forward_list = [Sae0Decode(), skip_path, Sae1Encode()]
-            forward = t.nn.Sequential(*forward_list)
+            sae0_decode = Sae0Decode(sae0, primary_device)
+            sae1_encode = Sae1Encode(sae1, primary_device)
             
-            # Wrap in DataParallel if using multiple GPUs
+            skip_list = [base_model.gpt.transformer.h[layer0].ln_2, base_model.gpt.transformer.h[layer0].mlp]
+            skip = nn.Sequential(*skip_list)
+            
             if len(self.device_ids) > 1 and not self.use_ddp:
-                forward = DataParallel(forward, device_ids=self.device_ids)
+                skip = DataParallel(skip, device_ids=self.device_ids)
+            
+            skip_path = SkipModule(skip)
+            
+            # Create the full forward path
+            class ForwardPath(nn.Module):
+                def __init__(self, sae0_decode, skip_path, sae1_encode, primary_device):
+                    super().__init__()
+                    self.sae0_decode = sae0_decode
+                    self.skip_path = skip_path
+                    self.sae1_encode = sae1_encode
+                    self.primary_device = primary_device
+                
+                def forward(self, x):
+                    x = self.sae0_decode(x)
+                    x = self.skip_path(x)
+                    if x.device != self.primary_device:
+                        x = x.to(self.primary_device)
+                    x = self.sae1_encode(x)
+                    return x
+            
+            forward = ForwardPath(sae0_decode, skip_path, sae1_encode, primary_device)
 
             return forward, sae0, sae1
 
@@ -389,7 +497,8 @@ class IntegratedGradientAttributor(Attributor):
                  steps: int = 10, verbose: bool = False, abs: bool = False, 
                  just_last: bool = False, save_dir: str = "./attributions",
                  device_ids: Optional[list] = None, use_ddp: bool = False,
-                 checkpoint_every: int = 10):
+                 checkpoint_every: int = 1000, memory_efficient: bool = True,
+                 chunk_size: Optional[int] = None):
         """
         Returns a dict of all consecutive integrated gradient attributions for a model.
         :param model: SparsifiedGPT model
@@ -402,6 +511,8 @@ class IntegratedGradientAttributor(Attributor):
         :param device_ids: List of GPU device IDs to use
         :param use_ddp: Whether to use DistributedDataParallel
         :param checkpoint_every: Save intermediate results every N feature magnitudes
+        :param memory_efficient: Use memory-efficient mode (processes gradients sequentially)
+        :param chunk_size: Override automatic chunk size calculation
         """
         super().__init__(model, dataloader, nbatches, verbose, save_dir, device_ids, use_ddp)
         
@@ -409,9 +520,14 @@ class IntegratedGradientAttributor(Attributor):
         self.abs = abs
         self.just_last = just_last
         self.checkpoint_every = checkpoint_every
+        self.memory_efficient = memory_efficient
+        self.manual_chunk_size = chunk_size
         
         self.is_jump = (self.base_model.config.sae_variant == SAEVariant.JUMP_RELU) or \
                       (self.base_model.config.sae_variant == SAEVariant.JUMP_RELU_STAIRCASE)
+        
+        if verbose and memory_efficient:
+            print(f"   Memory-efficient mode: ENABLED (slower but uses less memory)")
 
     def save_checkpoint(self, attributions: Tensor, layer0: int, layer1: Optional[int], 
                        fm_start: int, fm_end: int):
@@ -462,12 +578,24 @@ class IntegratedGradientAttributor(Attributor):
         
         attributions = t.zeros((source_size, target_size), device=primary_device)
         
-        # Process in chunks for better GPU utilization
-        chunk_size = max(1, target_size // (len(self.device_ids) * 4))  # Adjust chunk size based on GPU count
+        # Calculate chunk size based on available memory and settings
+        if self.manual_chunk_size is not None:
+            chunk_size = self.manual_chunk_size
+        elif self.memory_efficient:
+            chunk_size = 1  # Process one feature at a time in memory-efficient mode
+        else:
+            # Adaptive chunk size based on GPU count and feature size
+            base_chunk = max(1, target_size // (len(self.device_ids) * 8))
+            # Reduce chunk size for larger models to avoid OOM
+            if source_size * target_size > 1e8:  # If total connections > 100M
+                chunk_size = max(1, base_chunk // 4)
+            else:
+                chunk_size = base_chunk
         
         if self.verbose:
             print(f"\n🔄 Processing {self.nbatches} batches")
             print(f"   Chunk size: {chunk_size} features")
+            print(f"   Memory-efficient mode: {'ON' if self.memory_efficient else 'OFF'}")
             total_chunks = (target_size + chunk_size - 1) // chunk_size
             print(f"   Total chunks per batch: {total_chunks}")
         
@@ -481,7 +609,8 @@ class IntegratedGradientAttributor(Attributor):
             
             # Feature extraction
             feat_start = time.time()
-            feature_magnitudes = get_SAE_activations(self.model, self.paths, input.long(), [layer0])
+            # Use base_model instead of self.model to handle DataParallel wrapper
+            feature_magnitudes = get_SAE_activations(self.base_model, self.paths, input.long(), [layer0])
             feature_magnitudes0 = feature_magnitudes[layer0]
             feat_time = time.time() - feat_start
             
@@ -515,30 +644,65 @@ class IntegratedGradientAttributor(Attributor):
                 # Stack directions for batch processing
                 batch_directions = t.stack(batch_directions)  # (chunk_size, target_size)
                 
-                # Process chunk in parallel
+                # Process chunk in parallel or sequentially based on memory mode
                 grad_start = time.time()
-                gradients = self.integrate_gradient_batch(
-                    x=feature_magnitudes0,
-                    fun=forward,
-                    directions=batch_directions,
-                    base=base
-                )
+                
+                if self.memory_efficient or chunk_size == 1:
+                    # Process gradients one at a time to save memory
+                    gradients = []
+                    for direction in batch_directions:
+                        gradient = self.integrate_gradient(
+                            x=feature_magnitudes0,
+                            x_i=None,
+                            fun=forward,
+                            direction=direction,
+                            base=base
+                        )
+                        gradients.append(gradient)
+                        # Clear intermediate tensors
+                        if hasattr(gradient, 'grad_fn'):
+                            gradient = gradient.detach()
+                        t.cuda.empty_cache()
+                else:
+                    # Batch processing for better speed
+                    gradients = self.integrate_gradient_batch(
+                        x=feature_magnitudes0,
+                        fun=forward,
+                        directions=batch_directions,
+                        base=base
+                    )
+                
                 grad_time = time.time() - grad_start
                 
                 # Update attributions
                 update_start = time.time()
                 for i, fm_i in enumerate(chunk_indices):
+                    if isinstance(gradients, list):
+                        grad = gradients[i]
+                    else:
+                        grad = gradients[i]
+                    
                     if self.abs:
                         if self.just_last:
-                            attributions[:, fm_i] += (gradients[i].abs()).sum(dim=0)
+                            attributions[:, fm_i] += (grad.abs()).sum(dim=0)
                         else:
-                            attributions[:, fm_i] += (gradients[i].abs()).sum(dim=[0, 1])
+                            attributions[:, fm_i] += (grad.abs()).sum(dim=[0, 1])
                     else:
                         if self.just_last:
-                            attributions[:, fm_i] += (gradients[i]**2).sum(dim=0)
+                            attributions[:, fm_i] += (grad**2).sum(dim=0)
                         else:
-                            attributions[:, fm_i] += (gradients[i]**2).sum(dim=[0, 1])
+                            attributions[:, fm_i] += (grad**2).sum(dim=[0, 1])
+                    
+                    # Clear gradient tensor after use in memory-efficient mode
+                    if self.memory_efficient and hasattr(grad, 'grad_fn'):
+                        grad = grad.detach()
+                        del grad
+                
                 update_time = time.time() - update_start
+                
+                # Clear GPU cache periodically in memory-efficient mode
+                if self.memory_efficient and chunk_count % 10 == 0:
+                    t.cuda.empty_cache()
                 
                 chunk_time = time.time() - chunk_start_time
                 chunk_total_time += chunk_time
@@ -719,7 +883,8 @@ class ManualAblationAttributor(Attributor):
                 
                 # Feature extraction
                 feat_start = time.time()
-                feature_magnitudes = get_SAE_activations(self.model, self.paths, input.long(), [layer0, layer1])
+                # Use base_model instead of self.model to handle DataParallel wrapper
+                feature_magnitudes = get_SAE_activations(self.base_model, self.paths, input.long(), [layer0, layer1])
                 feature_magnitudes0 = feature_magnitudes[layer0]
                 feature_magnitudes1 = feature_magnitudes[layer1]
                 batchsize = feature_magnitudes0.shape[0]

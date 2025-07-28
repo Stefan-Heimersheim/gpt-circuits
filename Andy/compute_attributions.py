@@ -75,7 +75,7 @@ if __name__ == "__main__":
     )
 
     if args.attribution_method == "ig":
-        attributor = IntegratedGradientAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, steps=args.steps)
+        attributor = IntegratedGradientAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, steps=args.steps, chunk_size=4)
         attributions = attributor.layer_by_layer(layers=layers)
     elif args.attribution_method == "ma":
         attributor = ManualAblationAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, epsilon=args.epsilon)
