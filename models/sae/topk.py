@@ -130,6 +130,12 @@ class StaircaseTopKSAE(TopKBase, StaircaseBaseSAE, SparseAutoencoder):
         self.b_enc = nn.Parameter(torch.zeros(self.feature_size))
         self.b_dec = nn.Parameter(torch.zeros(self.embedding_size))
         
+    def __repr__(self):
+        """
+        Custom __repr__ to avoid circular reference with shared_context.
+        """
+        return f"StaircaseTopKSAE(feature_size={self.feature_size}, is_first={self.is_first})"
+        
     @property
     def W_dec(self):
         return self.shared_context.W_dec[:self.feature_size, :]

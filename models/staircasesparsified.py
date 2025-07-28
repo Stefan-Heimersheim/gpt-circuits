@@ -64,4 +64,10 @@ class StaircaseSparsifiedGPT(SparsifiedGPT):
         self.sae_keys = self.saes.keys()
                 
         self.saes = nn.ModuleDict(self.saes)
+    
+    def __repr__(self):
+        """
+        Custom __repr__ to avoid circular reference with shared_context.
+        """
+        return f"StaircaseSparsifiedGPT(\n  (gpt): {self.gpt}\n  (saes): {self.saes}\n  (shared_context): <1 shared context>\n)"
         

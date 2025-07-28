@@ -64,6 +64,12 @@ class StaircaseBlockSparsifiedGPT(JBlockSparsifiedGPT):
                 
         self.saes = nn.ModuleDict(self.saes)
     
+    def __repr__(self):
+        """
+        Custom __repr__ to avoid circular reference with shared_context.
+        """
+        return f"StaircaseBlockSparsifiedGPT(\n  (gpt): {self.gpt}\n  (saes): {self.saes}\n  (shared_context): <{len(self.shared_context)} shared contexts>\n)"
+    
     @contextmanager
     def record_activations(self):
         """
