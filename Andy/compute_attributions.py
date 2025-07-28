@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epsilon", type=float, default=0.0, help="Epsilon value for ma (ma only)")
     parser.add_argument("--verbose", type=bool, default=True, help="Verbose output")
     parser.add_argument("--layers", type=str, default='all', help="Layers to compute attributions for, either 'all' or a comma-separated list of layer indices")
+    parser.add_argument("--chunk_size", type=int, default=4, help="Chunk size for processing")
     #parser.add_argument("--config", type="", help="Model config")
     
     return parser.parse_args()
@@ -75,7 +76,7 @@ if __name__ == "__main__":
     )
 
     if args.attribution_method == "ig":
-        attributor = IntegratedGradientAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, steps=args.steps, chunk_size=4)
+        attributor = IntegratedGradientAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, steps=args.steps, chunk_size=args.chunk_size)
         attributions = attributor.layer_by_layer(layers=layers)
     elif args.attribution_method == "ma":
         attributor = ManualAblationAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, epsilon=args.epsilon)
