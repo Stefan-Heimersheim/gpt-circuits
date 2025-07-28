@@ -497,7 +497,7 @@ class IntegratedGradientAttributor(Attributor):
                  steps: int = 10, verbose: bool = False, abs: bool = False, 
                  just_last: bool = False, save_dir: str = "./attributions",
                  device_ids: Optional[list] = None, use_ddp: bool = False,
-                 checkpoint_every: int = 1000, memory_efficient: bool = True,
+                 checkpoint_every: int = 12000, memory_efficient: bool = True,
                  chunk_size: Optional[int] = None):
         """
         Returns a dict of all consecutive integrated gradient attributions for a model.
