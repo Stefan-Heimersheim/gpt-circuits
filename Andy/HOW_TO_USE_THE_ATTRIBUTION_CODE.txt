@@ -1,5 +1,35 @@
 HOW TO USE THE ATTRIBUTION CODE:
 
+GPT-2
+0) 
+Do the usual setup, run the following if you haven't already
+    pip install -r requirements.txt
+    python -m data.fineweb_edu_10b.prepare (This takes like an hour, you need 100GB of disk space, add that on runpod before you run)
+1)
+Download the models
+    hf download davidquarel/sc.mlpblock.gpt2.k32.x32 --local-dir checkpoints/sc.mlpblock.gpt2.k32.x32
+    hf download davidquarel/jln.mlpblock.gpt2-sparse-0.0ep00 --local-dir checkpoints/jln.mlpblock.gpt2-sparse-0.0ep00
+    hf download davidquarel/jln.mlpblock.gpt2-sparse-1.0e-08 --local-dir checkpoints/jln.mlpblock.gpt2-sparse-1.0e-08
+    hf download davidquarel/jln.mlpblock.gpt2-sparse-5.0e-01 --local-dir checkpoints/jln.mlpblock.gpt2-sparse-5.0e-01
+
+
+1) 
+commands.txt has a list of commands like
+    CUDA_VISIBLE_DEVICES=0 python Andy/compute_attributions.py --load_from=checkpoints/jln.mlpblock.gpt2-sparse-0.0ep00 --save_to=Andy/data --data_dir=data/fineweb_edu_10b --save_name=jln.mlpblock.gpt2-sparse-0.0ep00 --num_batches=8 --batch_size=12 --steps=1 --attribution_method=ig --layers=1
+
+Match these to whatever your compute is, and what layer you want to run. layers can be a list
+
+
+
+
+
+
+
+
+
+
+
+SHAKESPEARE
 0) Do the usual setup, run the following if you haven't already
 pip install -r requirements.txt
 python -m data.shakespeare.prepare
