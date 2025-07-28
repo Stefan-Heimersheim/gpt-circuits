@@ -62,24 +62,31 @@ class Attributor():
         
         
 
-    def layer_by_layer(self)->dict:
-        layers = self.model.gpt.config.n_layer
+    def layer_by_layer(self, layers: list[int] = [])->dict:
+        if len(layers) == 0:
+            layers = list(range(self.model.gpt.config.n_layer))
+        else:
+            layers = layers
+        assert len(layers) > 0, "Layers must be a non-empty list"
+        assert min(layers) >= 0, "Layers must be a non-negative list"
+        assert max(layers) < self.model.gpt.config.n_layer, "Layers must be less than the number of layers in the model"
+        
         if self.paths == PathType.BLOCK:
-            for i in range(layers): #In case of SAE 4 error change to       for i in range(layers-1):
+            for i in layers: #In case of SAE 4 error change to       for i in range(layers-1):
                 self.attributions[f'{i}-{i+1}'] = self.single_layer(i, i+1)
                 self.dataloader.reset()
                 if self.verbose:
                     print(f"Finished Connections from Layer {i} to {i+1}")
             return self.attributions
         elif self.paths == PathType.MLP:
-            for i in range(layers):
+            for i in layers:
                 self.attributions[f'MLP_{i}'] = self.single_layer(i)
                 self.dataloader.reset()
                 if self.verbose:
                     print(f"Finished Connections Across MLP in Layer {i}")
             return self.attributions
         elif self.paths == PathType.MLP_LAYER:
-            for i in range(layers):
+            for i in layers:
                 self.attributions[f'MLP_BLOCK_{i}'] = self.single_layer(i)
                 self.dataloader.reset()
                 if self.verbose:

@@ -1,4 +1,4 @@
-from attributor import IntegratedGradientAttributor, ManualAblationAttributor, PathType
+from attributor_new import IntegratedGradientAttributor, ManualAblationAttributor, PathType
 import os
 import json
 import sys
@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=10, help="Number of steps in ig path (ig only)")
     parser.add_argument("--epsilon", type=float, default=0.0, help="Epsilon value for ma (ma only)")
     parser.add_argument("--verbose", type=bool, default=True, help="Verbose output")
+    parser.add_argument("--layers", type=str, default='all', help="Layers to compute attributions for, either 'all' or a comma-separated list of layer indices")
     #parser.add_argument("--config", type="", help="Model config")
     
     return parser.parse_args()
@@ -58,6 +59,11 @@ if __name__ == "__main__":
     data_dir = args.data_dir
     batch_size = args.batch_size
 
+    if args.layers == 'all':
+        layers = list(range(model.config.n_layers))
+    else:
+        layers = [int(layer) for layer in args.layers.split(',')]
+
 
     dataloader = TrainingDataLoader(
         dir_path=data_dir,
@@ -70,10 +76,10 @@ if __name__ == "__main__":
 
     if args.attribution_method == "ig":
         attributor = IntegratedGradientAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, steps=args.steps)
-        attributions = attributor.layer_by_layer()
+        attributions = attributor.layer_by_layer(layers=layers)
     elif args.attribution_method == "ma":
         attributor = ManualAblationAttributor(model, dataloader, nbatches = args.num_batches, verbose=args.verbose, epsilon=args.epsilon)
-        attributions = attributor.layer_by_layer()
+        attributions = attributor.layer_by_layer(layers=layers)
 
     #attributions_listed = {}
     #for key in attributions.keys():
