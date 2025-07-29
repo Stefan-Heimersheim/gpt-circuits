@@ -121,26 +121,36 @@ class JBlockSparsifiedGPT(SparsifiedGPT):
                 hook_fn.remove()
                 
     @contextmanager
-    def use_saes(self, activations_to_patch: Iterable[str] = ()):
+    def use_saes(self, activations_to_patch: Iterable[str] = (), sae_keys_to_run: Optional[Iterable[str]] = None):
         """
         Context manager for using SAE layers during the forward pass.
 
         :param activations_to_patch: Layer indices and hook locations for patching residual stream activations with reconstructions.
+        :param sae_keys_to_run: SAE keys to run. If None, runs all SAEs in layer_idxs.
         :yield encoder_outputs: Dictionary of encoder outputs.
         key = f"{layer_idx}_{hook_loc}" e.g. 0_mlpin, 0_mlpout, 1_mlpin, 1_mlpout, etc.
         """
         encoder_outputs: dict[str, EncoderOutput] = {}
 
+        # Determine which SAE keys to run
+        if sae_keys_to_run is None:
+            keys_to_run = set(self.sae_keys)
+        else:
+            keys_to_run = set(sae_keys_to_run)
+
         hooks = []
         for layer_idx in self.layer_idxs:
-
             block = self.gpt.transformer.h[layer_idx]
 
+            # Check if we should run resid_mid SAE for this layer
             sae_key = f'{layer_idx}_{HookPoint.RESID_MID.value}'
-            self.make_sae_pre_hook(hooks, encoder_outputs, block.ln_2, sae_key, activations_to_patch)
+            if sae_key in keys_to_run:
+                self.make_sae_pre_hook(hooks, encoder_outputs, block.ln_2, sae_key, activations_to_patch)
             
+            # Check if we should run resid_post SAE for this layer
             sae_key = f'{layer_idx}_{HookPoint.RESID_POST.value}'
-            self.make_sae_post_hook(hooks, encoder_outputs, block, sae_key, activations_to_patch)
+            if sae_key in keys_to_run:
+                self.make_sae_post_hook(hooks, encoder_outputs, block, sae_key, activations_to_patch)
             
         try:
             yield encoder_outputs

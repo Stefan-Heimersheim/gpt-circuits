@@ -125,22 +125,30 @@ class SparsifiedGPT(nn.Module):
                 hook.remove()
 
     @contextmanager
-    def use_saes(self, activations_to_patch: Iterable[str] = ()):
+    def use_saes(self, activations_to_patch: Iterable[str] = (), sae_keys_to_run: Optional[Iterable[str]] = None):
         """
         Context manager for using SAE layers during the forward pass.
 
         :param activations_to_patch: Layer indices for patching residual stream activations with reconstructions.
+        :param sae_keys_to_run: SAE keys to run. If None, runs all SAEs in layer_idxs.
         :yield encoder_outputs: Dictionary of encoder outputs.
         """
         # Dictionary for storing results
         encoder_outputs: dict[int, EncoderOutput] = {}
 
+        # Determine which SAE keys to run
+        if sae_keys_to_run is None:
+            keys_to_run = [f"{layer_idx}_{HookPoint.ACT.value}" for layer_idx in self.layer_idxs]
+        else:
+            keys_to_run = list(sae_keys_to_run)
+
         # Register hooks
         hooks = []
-        for layer_idx in self.layer_idxs:
-            target = self.get_hook_target(layer_idx)
-            self.make_sae_pre_hook(hooks, encoder_outputs, target, f"{layer_idx}_{HookPoint.ACT.value}", activations_to_patch)
-
+        for sae_key in keys_to_run:
+            if sae_key in self.saes:  # Only run if the SAE exists
+                layer_idx, _ = self.split_sae_key(sae_key)
+                target = self.get_hook_target(layer_idx)
+                self.make_sae_pre_hook(hooks, encoder_outputs, target, sae_key, activations_to_patch)
 
         try:
             yield encoder_outputs
@@ -151,7 +159,12 @@ class SparsifiedGPT(nn.Module):
                 hook.remove()
 
     def forward(
-        self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None, is_eval: bool = False, stop_at_layer: Optional[int] = None
+        self, 
+        idx: torch.Tensor, 
+        targets: Optional[torch.Tensor] = None, 
+        is_eval: bool = False, 
+        stop_at_layer: Optional[int] = None, 
+        sae_keys_to_run: Optional[Iterable[str]] = None
     ) -> SparsifiedGPTOutput:
         """
         Forward pass of the sparsified model.
@@ -161,9 +174,10 @@ class SparsifiedGPT(nn.Module):
         :param is_eval: Whether the model is in evaluation mode.
         :param stop_at_layer: Optional layer index to stop the forward pass at. Exclusive.
                               If specified, returns early with limited output. Defaults to None (run full model).
+        :param sae_keys_to_run: SAE keys to run. If None, runs all SAEs.
         """
         with self.record_activations() as activations:
-            with self.use_saes() as encoder_outputs:
+            with self.use_saes(sae_keys_to_run=sae_keys_to_run) as encoder_outputs:
                 gpt_output = self.gpt(idx, targets, stop_at_layer=stop_at_layer)
                 
                 # Handle early termination case
@@ -199,7 +213,8 @@ class SparsifiedGPT(nn.Module):
                 ce_loss_increases = torch.stack(ce_loss_increases)
 
                 # Calculate compound cross-entropy loss as a result of patching activations.
-                with self.use_saes(activations_to_patch=self.saes.keys()):
+                keys_for_patching = sae_keys_to_run if sae_keys_to_run is not None else self.saes.keys()
+                with self.use_saes(activations_to_patch=keys_for_patching, sae_keys_to_run=sae_keys_to_run):
                     _, compound_cross_entropy_loss = self.gpt(idx, targets)
                     compound_ce_loss_increase = compound_cross_entropy_loss - cross_entropy_loss
                 self.train()
