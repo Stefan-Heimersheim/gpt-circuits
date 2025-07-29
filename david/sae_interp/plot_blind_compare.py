@@ -10,7 +10,9 @@ import numpy as np
 from pathlib import Path
 from collections import defaultdict
 
-def load_comparison_results(data_dir="data"):
+DATA_DIR = "/workspace/gpt-circuits/david/sae_interp/data"
+
+def load_comparison_results(data_dir=DATA_DIR):
     """Load all blind comparison result files."""
     data_path = Path(data_dir)
     result_files = list(data_path.glob("blind_comparison_results_*.json"))
@@ -53,23 +55,37 @@ def create_single_session_chart(analysis, filename):
     values = [analysis['staircase_wins'], analysis['topk_wins'], analysis['indifferent']]
     colors = ['#2E8B57', '#CD5C5C', '#708090']  # Sea green, Indian red, Slate gray
     
+    # Calculate error bars (Poisson for small counts, Binomial for larger samples)
+    total = analysis['total_comparisons']
+    error_bars = []
+    
+    for value in values:
+        if total > 30 and value > 5:  # Use binomial approximation for larger samples
+            # Binomial standard error: sqrt(n * p * (1-p))
+            p = value / total if total > 0 else 0
+            error = np.sqrt(total * p * (1 - p)) if total > 0 else 0
+        else:  # Use Poisson approximation for small counts
+            # Poisson standard error: sqrt(count)
+            error = np.sqrt(value) if value > 0 else 0
+        error_bars.append(error)
+    
     plt.figure(figsize=(10, 6))
-    bars = plt.bar(categories, values, color=colors, alpha=0.7, edgecolor='black')
+    bars = plt.bar(categories, values, color=colors, alpha=0.7, edgecolor='black', 
+                   yerr=error_bars, capsize=5, error_kw={'linewidth': 2, 'capthick': 2})
     
     # Add value labels on bars
-    for bar, value in zip(bars, values):
+    for bar, value, error in zip(bars, values, error_bars):
         height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+        plt.text(bar.get_x() + bar.get_width()/2., height + error + 0.2,
                 f'{value}', ha='center', va='bottom', fontweight='bold')
     
     plt.title(f'Blind Comparison Results - {analysis["user_name"]}\n'
-              f'Total Comparisons: {analysis["total_comparisons"]}', 
+              f'Total Comparisons: {analysis["total_comparisons"]} (with {("Binomial" if total > 30 else "Poisson")} error bars)', 
               fontsize=14, fontweight='bold')
     plt.ylabel('Number of Votes', fontsize=12)
     plt.xlabel('Preference Category', fontsize=12)
     
     # Add percentage annotations
-    total = analysis['total_comparisons']
     if total > 0:
         percentages = [f'({v/total*100:.1f}%)' for v in values]
         for i, (bar, pct) in enumerate(zip(bars, percentages)):
@@ -79,7 +95,7 @@ def create_single_session_chart(analysis, filename):
     plt.tight_layout()
     
     # Save the plot
-    output_path = Path("data") / f"comparison_chart_{filename.replace('.json', '.png')}"
+    output_path = f"{DATA_DIR}/comparison_chart_{filename.replace('.json', '.png')}"
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"Chart saved to: {output_path}")
     
@@ -100,17 +116,31 @@ def create_combined_chart(all_analyses):
     values = [total_staircase, total_topk, total_indifferent]
     colors = ['#2E8B57', '#CD5C5C', '#708090']
     
+    # Calculate error bars (Poisson for small counts, Binomial for larger samples)
+    error_bars = []
+    
+    for value in values:
+        if total_comparisons > 30 and value > 5:  # Use binomial approximation for larger samples
+            # Binomial standard error: sqrt(n * p * (1-p))
+            p = value / total_comparisons if total_comparisons > 0 else 0
+            error = np.sqrt(total_comparisons * p * (1 - p)) if total_comparisons > 0 else 0
+        else:  # Use Poisson approximation for small counts
+            # Poisson standard error: sqrt(count)
+            error = np.sqrt(value) if value > 0 else 0
+        error_bars.append(error)
+    
     plt.figure(figsize=(12, 8))
-    bars = plt.bar(categories, values, color=colors, alpha=0.7, edgecolor='black')
+    bars = plt.bar(categories, values, color=colors, alpha=0.7, edgecolor='black',
+                   yerr=error_bars, capsize=5, error_kw={'linewidth': 2, 'capthick': 2})
     
     # Add value labels on bars
-    for bar, value in zip(bars, values):
+    for bar, value, error in zip(bars, values, error_bars):
         height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2., height + 0.5,
+        plt.text(bar.get_x() + bar.get_width()/2., height + error + 0.8,
                 f'{value}', ha='center', va='bottom', fontweight='bold', fontsize=12)
     
     plt.title(f'Combined Blind Comparison Results\n'
-              f'Total Comparisons: {total_comparisons} across {len(all_analyses)} sessions', 
+              f'Total Comparisons: {total_comparisons} across {len(all_analyses)} sessions (with {("Binomial" if total_comparisons > 30 else "Poisson")} error bars)', 
               fontsize=16, fontweight='bold')
     plt.ylabel('Number of Votes', fontsize=14)
     plt.xlabel('Preference Category', fontsize=14)
@@ -126,7 +156,7 @@ def create_combined_chart(all_analyses):
     plt.tight_layout()
     
     # Save the combined plot
-    output_path = Path("data") / "comparison_chart_combined.png"
+    output_path = f"{DATA_DIR}/comparison_chart_combined.png"
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"Combined chart saved to: {output_path}")
     
