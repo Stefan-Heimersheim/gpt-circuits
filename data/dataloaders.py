@@ -1,7 +1,7 @@
 import os
 from functools import cached_property
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Iterator
 
 import numpy as np
 import torch
@@ -54,6 +54,34 @@ class TrainingDataLoader:
         self.total_tokens = sum([np.load(s, mmap_mode="r").size for s in self.shards])
 
         self.reset()
+
+    def __len__(self) -> int:
+        """
+        Returns the total number of batches available in the dataset.
+        This accounts for the fact that each process only sees a subset of the data.
+        """
+        # Calculate how many tokens each process can access
+        tokens_per_process = self.total_tokens // self.num_processes
+        # Calculate how many batches can be created from these tokens
+        # Each batch uses B * T tokens, and we need B * T + 1 tokens for targets
+        batches_per_process = tokens_per_process // (self.B * self.T)
+        return batches_per_process
+
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Returns an iterator that yields batches of data.
+        """
+        # Reset the dataloader to start from the beginning
+        self.reset()
+        
+        # Calculate how many batches to yield
+        num_batches = len(self)
+        
+        for _ in range(num_batches):
+            # Use a default device (CPU) if none specified
+            # In practice, you'd want to pass the device explicitly
+            device = torch.device('cpu')
+            yield self.next_batch(device)
 
     def reset(self):
         """
