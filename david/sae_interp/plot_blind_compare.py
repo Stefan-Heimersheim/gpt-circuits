@@ -10,7 +10,7 @@ import numpy as np
 from pathlib import Path
 from collections import defaultdict
 
-DATA_DIR = "/workspace/gpt-circuits/david/sae_interp/data"
+DATA_DIR = "data"
 
 def load_comparison_results(data_dir=DATA_DIR):
     """Load all blind comparison result files."""
@@ -68,6 +68,12 @@ def create_single_session_chart(analysis, filename):
             # Poisson standard error: sqrt(count)
             error = np.sqrt(value) if value > 0 else 0
         error_bars.append(error)
+    
+    # Print copyable values for this session
+    print(f"\n📊 COPYABLE VALUES - {analysis['user_name']}")
+    print(f"Total comparisons: {total}")
+    for cat, val, err in zip(categories, values, error_bars):
+        print(f"{cat}: {val} ± {err:.2f}")
     
     plt.figure(figsize=(10, 6))
     bars = plt.bar(categories, values, color=colors, alpha=0.7, edgecolor='black', 
